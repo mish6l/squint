@@ -21,10 +21,31 @@ button,input,select{font:inherit;color:inherit}
 
 /* ---------- rail ---------- */
 #rail{
-  width:302px;flex:0 0 302px;background:var(--panel);
+  width:var(--railw,302px);flex:0 0 var(--railw,302px);background:var(--panel);
   border-right:1px solid var(--line);
-  display:flex;flex-direction:column;overflow:hidden;
+  display:flex;flex-direction:column;overflow:hidden;position:relative;
 }
+/* Drag handle. The rail has to be widenable: a credit card is 85.6 mm, which
+   on a dense monitor is well over 400 px, and calibration is meaningless if the
+   card cannot reach its true physical width. */
+#railGrip{
+  position:absolute;top:0;right:-3px;width:7px;height:100%;cursor:col-resize;z-index:30;
+}
+#railGrip:hover{background:var(--acc);opacity:.35}
+/* Calibration also gets a full-stage overlay, so it works at ANY rail width. */
+#calModal{
+  position:absolute;inset:0;z-index:40;display:none;background:rgba(8,10,13,.97);
+  padding:40px;overflow:auto;
+}
+#calModal.on{display:block}
+#calModal h2{margin:0 0 6px;font-size:16px;font-weight:600;letter-spacing:.02em}
+#calModal p{margin:0 0 14px;color:var(--dim);font-size:12.5px;max-width:620px;line-height:1.6}
+#calCardBig{
+  background:linear-gradient(135deg,#2a3038,#1a1e24);border:1px solid #676f7c;
+  border-radius:10px;display:flex;align-items:flex-end;justify-content:space-between;
+  padding:10px 14px;color:var(--dim);font-size:11px;margin:10px 0 16px;
+}
+#calModal .row{max-width:620px}
 #brand{
   padding:14px 16px 12px;border-bottom:1px solid var(--line);
   display:flex;align-items:baseline;gap:9px;
@@ -153,17 +174,39 @@ video{position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-e
 <body>
 
 <div id="rail">
+  <div id="railGrip" title="Drag to widen the sidebar"></div>
   <div id="brand"><b>SQUINT</b><span>LED pitch &amp; acuity</span></div>
   <div id="railScroll">
 
     <div class="sec" data-k="wall">
       <h3>Wall</h3>
       <div class="secBody">
-        <div class="row"><label>Width</label><input type="number" id="wallW" value="6" step="0.1" min="0.1"><span class="val">m</span></div>
-        <div class="row"><label>Height</label><input type="number" id="wallH" value="3" step="0.1" min="0.1"><span class="val">m</span></div>
-        <div class="row"><label>Pitch A</label><input type="number" id="pitchA" value="2.9" step="0.1" min="0.4"><span class="val">mm</span></div>
-        <div class="chips" id="pitchChips"></div>
-        <div class="row" id="rowPitchB"><label>Pitch B</label><input type="number" id="pitchB" value="6" step="0.1" min="0.4"><span class="val">mm</span></div>
+        <div class="seg">
+          <button class="btn on" id="modeCab">Build from cabinets</button>
+          <button class="btn" id="modeFree">Free size</button>
+        </div>
+        <div id="cabUI">
+          <div class="row"><label>Cabinet</label>
+            <select id="cabSel"></select>
+          </div>
+          <div class="row"><label>Cabinets</label>
+            <input type="number" id="cabX" value="12" step="1" min="1"><span class="val">across</span></div>
+          <div class="row"><label></label>
+            <input type="number" id="cabY" value="6" step="1" min="1"><span class="val">down</span></div>
+          <div class="row" id="rowCustom" style="display:none">
+            <label>Custom</label>
+            <input type="number" id="cabMM" value="500" step="1" min="50" title="cabinet width, mm">
+            <input type="number" id="cabPX" value="192" step="1" min="8" title="pixels across the cabinet">
+          </div>
+          <p class="hint" id="cabHint"></p>
+        </div>
+        <div id="freeUI" style="display:none">
+          <div class="row"><label>Width</label><input type="number" id="wallW" value="6" step="0.1" min="0.1"><span class="val">m</span></div>
+          <div class="row"><label>Height</label><input type="number" id="wallH" value="3" step="0.1" min="0.1"><span class="val">m</span></div>
+          <div class="row"><label>Pitch A</label><input type="number" id="pitchA" value="2.9" step="0.1" min="0.4"><span class="val">mm</span></div>
+          <div class="chips" id="pitchChips"></div>
+        </div>
+        <div class="row" id="rowPitchB"><label>Compare to</label><input type="number" id="pitchB" value="3.9" step="0.1" min="0.4"><span class="val">mm</span></div>
         <div class="row"><label>Fill factor</label><input type="range" id="fill" min="20" max="100" value="50"><span class="val" id="fillV">50%</span></div>
         <p class="hint">Fill factor = lit LED area vs. pitch cell. SMD ≈ 40–55%, GOB/COB ≈ 70–90%. Drives the inter-pixel gap only — mean brightness is held constant, as on a calibrated wall.</p>
         <div class="row"><label>Bit depth</label>
@@ -176,6 +219,53 @@ video{position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-e
         </div>
         <div class="row"><label>Wall driven at</label><input type="range" id="wbright" min="5" max="100" value="100"><span class="val" id="wbrightV">100%</span></div>
         <p class="hint">Quantisation happens in the signal domain, as a real processor does — which is why it shows up as posterisation near black. Driving the wall dim costs you greyscale: at 20% brightness an 8-bit chain has barely 6 bits left, and that is what bands your dark grades.</p>
+      </div>
+    </div>
+
+    <div class="sec" data-k="chain">
+      <h3>Signal chain &amp; panels</h3>
+      <div class="secBody">
+        <div class="seg">
+          <button class="btn on" id="tCabGrid">Cabinet grid</button>
+          <button class="btn" id="tProc">Processor limit</button>
+        </div>
+        <div class="row" id="rowProc" style="display:none"><label>Feed</label>
+          <select id="procSel">
+            <option value="1920x1080">1920 × 1080 (HD)</option>
+            <option value="2560x1600">2560 × 1600</option>
+            <option value="3840x2160">3840 × 2160 (4K)</option>
+            <option value="4096x2160">4096 × 2160</option>
+            <option value="custom">Custom…</option>
+          </select>
+        </div>
+        <div class="row" id="rowProcCustom" style="display:none"><label>Feed px</label>
+          <input type="number" id="procW" value="1920" step="16" min="64">
+          <input type="number" id="procH" value="1080" step="16" min="64">
+        </div>
+        <p class="hint" id="procHint">The wall is fed from a processor output. If that feed is smaller than the wall's native grid, the wall is being upscaled and its real ceiling is the feed, not the panel count — the most common gap between the spec sold and the picture delivered.</p>
+        <div class="row"><label>Tile variance</label><input type="range" id="tileVar" min="0" max="12" value="0"><span class="val" id="tileVarV">0%</span></div>
+        <p class="hint">Cabinet-to-cabinet brightness spread. Mixed rental stock runs a few percent; large flat gradients in a grade are what reveal it on the floor.</p>
+      </div>
+    </div>
+
+    <div class="sec closed" data-k="array">
+      <h3>Screen array</h3>
+      <div class="secBody">
+        <div class="seg">
+          <button class="btn" id="tArray">Multiple screens</button>
+        </div>
+        <div class="row"><label>Screens</label><input type="number" id="arrN" value="3" step="1" min="2" max="12"><span class="val">across</span></div>
+        <div class="row"><label>Gap</label><input type="number" id="arrGap" value="1.5" step="0.1" min="0"><span class="val">m</span></div>
+        <p class="hint" id="arrHint">One canvas mapped across several physical screens — main plus IMAG sides, or a row of pillars. The gaps are real: whatever falls into them is not shown at all. Each screen keeps its own cabinet grid.</p>
+      </div>
+    </div>
+
+    <div class="sec" data-k="plan">
+      <h3>Build plan</h3>
+      <div class="secBody">
+        <div id="planOut" style="font-family:var(--mono);font-size:11.5px;color:var(--dim);line-height:1.75"></div>
+        <button class="btn wide acc" id="tplBtn" style="margin-top:9px">Download layout guide PNG</button>
+        <p class="hint">A guide at the wall's exact native resolution: cabinet grid, centre marks, safe area and the numbers stamped on it. Drop it into your comp as a reference layer.</p>
       </div>
     </div>
 
@@ -279,7 +369,8 @@ video{position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-e
     <div class="sec closed" data-k="cal">
       <h3>Monitor calibration</h3>
       <div class="secBody">
-        <p class="hint" style="margin-top:0">Drag until the box is exactly the size of a real credit card. Needed for 1:1 and eye-match accuracy.</p>
+        <button class="btn wide acc" id="calOpen">Calibrate full-screen…</button>
+        <p class="hint">Opens over the canvas so the card can reach its true size at any sidebar width. You can also drag the sidebar's right edge.</p>
         <div id="calCard">85.60 × 53.98 mm</div>
         <div class="row"><label>Card width</label><input type="range" id="calR" min="180" max="900" value="324"><span class="val" id="calV">3.78</span></div>
         <div class="row"><label>Your dist.</label><input type="number" id="monDist" value="600" step="25"><span class="val">mm</span></div>
@@ -321,6 +412,17 @@ video{position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-e
     <div id="wipeBar"></div>
     <div id="measureBox"></div>
     <div id="structBanner"></div>
+    <div id="calModal">
+      <h2>Monitor calibration</h2>
+      <p>Hold a real credit card against the screen and drag until the box matches it exactly
+         (ISO/IEC 7810 ID-1: 85.60 × 53.98 mm). Then set how far your eye is from the monitor.
+         Until this is done, 1:1 and eye-match are guesses — everything else is unaffected.</p>
+      <div id="calCardBig"><span>85.60 × 53.98 mm</span><span id="calBigNote"></span></div>
+      <div class="row"><label>Card width</label><input type="range" id="calR2" min="180" max="1200" value="324"><span class="val" id="calV2">3.78</span></div>
+      <div class="row"><label>Eye distance</label><input type="number" id="monDist2" value="600" step="25"><span class="val">mm</span></div>
+      <p class="hint" id="calHint2"></p>
+      <button class="btn acc" id="calDone">Done</button>
+    </div>
     <div id="drop">
       <h2>Drop an image or video onto the wall</h2>
       <p>SQUINT downsamples your content to the wall's real native grid, draws the physical LED gap, then filters it through the eye's 1-arcminute acuity limit at the viewer distance you set. Nothing leaves this machine.</p>
@@ -369,6 +471,14 @@ const clamp = (v,a,b) => v<a?a:v>b?b:v;
 
 const S = {
   wallW:6, wallH:3, pitchA:2.9, pitchB:6, fill:.5,
+  // Event walls are built from cabinets, not typed as arbitrary rectangles, and
+  // the pitch is DERIVED from the tile: a "2.6 mm" 500 mm cabinet carries 192
+  // pixels, so the true pitch is 500/192 = 2.604 and a 12-wide wall is exactly
+  // 2304 px. Typing 6 m / 2.6 mm instead gives 2307 -- a near-miss that makes
+  // every comp size and mapping slightly wrong.
+  wallMode:'cab', cabI:1, cabX:12, cabY:6, cabMM:500, cabPX:192,
+  cabGrid:true, tileVar:0, procOn:false, procW:1920, procH:1080,
+  arrayOn:false, arrayN:3, arrayGap:1.5,
   dist:5, fitMode:'fit', scaler:'good', ambient:0, absBlur:false, calibrated:false,
   grid:true, blur:true, zoomMode:'eye', zoomFree:1, figure:true,
   bits:8, wallBright:1, offAxis:0,
@@ -384,9 +494,59 @@ const tmp=[mk(),mk()], contentCv=mk(), cropCv=mk(), offA=mk(), offB=mk();
 const idealCv=mk(), idealOff=mk();   // offscreen reference wall for wipe mode
 
 /* ================= geometry ================= */
-function nativeRes(pitch){
+/* Generic rental cabinets, by pitch. Every one is a 500 mm tile carrying a whole
+   number of pixels, which is what makes the nominal pitch a round-off: the true
+   pitch is always cabinet_mm / cabinet_px. */
+const CABS=[
+  {n:'500×500 · 1.95 mm (256 px)', mm:500, px:256},
+  {n:'500×500 · 2.6 mm (192 px)',  mm:500, px:192},
+  {n:'500×500 · 2.9 mm (168 px)',  mm:500, px:168},
+  {n:'500×500 · 3.9 mm (128 px)',  mm:500, px:128},
+  {n:'500×500 · 4.8 mm (104 px)',  mm:500, px:104},
+  {n:'500×1000 · 2.6 mm (192 px)', mm:500, px:192, tall:2},
+  {n:'600×337.5 · 2.6 mm (231 px)',mm:600, px:231, ar:337.5/600},
+  {n:'Custom…',                    mm:0,   px:0, custom:true}
+];
+function cab(){
+  const c=CABS[clamp(S.cabI,0,CABS.length-1)];
+  if(c.custom) return {mm:S.cabMM, px:S.cabPX, tall:1, ar:1, n:'Custom'};
+  return {mm:c.mm, px:c.px, tall:c.tall||1, ar:c.ar||1, n:c.n};
+}
+function cabPitch(){ const c=cab(); return c.mm/Math.max(1,c.px); }
+// Cabinet height in pixels: square pixels, so it follows the physical aspect.
+function cabPxY(){ const c=cab(); return Math.max(1,Math.round(c.px*c.ar*c.tall)); }
+function cabMMY(){ const c=cab(); return c.mm*c.ar*c.tall; }
+// Drive the physical wall from the cabinet grid. wallW*1000/pitch then lands on
+// an exact integer by construction, so nativeRes() needs no special case.
+function syncFromCabinets(){
+  if(S.wallMode!=='cab') return;
+  S.pitchA = cabPitch();
+  S.wallW  = S.cabX*cab().mm/1000;
+  S.wallH  = S.cabY*cabMMY()/1000;
+}
+// One screen, in pixels.
+function screenRes(pitch){
   return { nx: Math.max(1,Math.round(S.wallW*1000/pitch)),
            ny: Math.max(1,Math.round(S.wallH*1000/pitch)) };
+}
+// Gap between screens, in wall pixels (the gap shows nothing at all).
+function gapPx(pitch){ return S.arrayOn ? Math.max(0,Math.round(S.arrayGap*1000/pitch)) : 0; }
+// The canvas the content is mapped across: for an array that spans every screen
+// AND the gaps between them, because a designer lays out one image over the lot.
+function nativeRes(pitch){
+  const s=screenRes(pitch);
+  if(!S.arrayOn) return s;
+  const n=Math.max(2,S.arrayN|0);
+  return { nx: s.nx*n + gapPx(pitch)*(n-1), ny: s.ny, perScreen:s, n };
+}
+// What the wall can actually resolve once the signal chain is taken into
+// account. A 2304-wide wall fed from a 1920 output is a 1920-wide wall that
+// happens to have more LEDs in it.
+function effectiveRes(pitch){
+  const {nx,ny}=nativeRes(pitch);
+  if(!S.procOn) return {ex:nx, ey:ny, limited:false};
+  const ex=Math.min(nx,S.procW), ey=Math.min(ny,S.procH);
+  return {ex, ey, limited:(ex<nx||ey<ny)};
 }
 // Where the content lands inside the native grid, in native pixels.
 function contentRect(nx,ny){
@@ -517,6 +677,11 @@ const GLE = (()=>{
     uniform vec2 uView, uOrigin, uCell, uNative, uLedSize, uCropOrigin;
     uniform vec4 uRect;
     uniform float uDecim, uFill, uGain, uAmb, uOffGain; uniform int uIdeal, uGrid;
+    // array: screens of uScrNx separated by uGapPx, repeating every uArrPitch
+    uniform float uArrPitch, uScrNx, uGapPx;
+    uniform vec2 uCabPx; uniform float uTileVar;
+    float hash21(vec2 p){ p=fract(p*vec2(127.1,311.7));
+      return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453); }
     // antiderivative of the lit-area indicator, so coverage is exact at any
     // footprint -- no threshold, no skipped gap, and it converges smoothly to
     // the fill factor when a screen pixel spans several cells
@@ -536,12 +701,26 @@ const GLE = (()=>{
           col = (uv.x<0.0||uv.y<0.0||uv.x>1.0||uv.y>1.0) ? vec3(0.0)
                                                          : texture(uContent,uv).rgb;
         } else {
+          // Gaps between physical screens show nothing -- content mapped there
+          // is simply lost, which is the point of modelling an array at all.
+          float localX = wall.x;
+          if(uArrPitch>0.5){
+            float m=mod(wall.x,uArrPitch);
+            if(m>=uScrNx){ oCol=vec4(0.0,0.0,0.0,1.0); return; }
+            localX=m;                                  // position within a screen
+          }
           vec2 uv=((wall-uCropOrigin)/uDecim)/uLedSize;
           col=texture(uTex,uv).rgb;
           if(uGrid==1){
             float s=sqrt(uFill);
             vec2 w=1.0/uCell;
             col*=cov1(wall.x,w.x,s)*cov1(wall.y,w.y,s)*uGain;
+          }
+          // Cabinet-to-cabinet brightness spread. Indexed per screen, so each
+          // screen carries its own tile stock rather than one continuous field.
+          if(uTileVar>0.0){
+            vec2 ci=floor(vec2(localX,wall.y)/uCabPx);
+            col*=1.0+(hash21(ci)-0.5)*2.0*uTileVar;
           }
         }
         col*=uOffGain;
@@ -667,8 +846,11 @@ const GLE = (()=>{
       while(cw>dw) step(Math.max(dw,Math.ceil(cw/64)), ch, 0);
       while(ch>dh) step(cw, Math.max(dh,Math.ceil(ch/64)), 1);
     }
-    // final resize: magnification, or the nearest-neighbour "cheap processor"
-    const out=grab(dw,dh,true);
+    // Final resize. The filter matters when this texture is later MAGNIFIED --
+    // e.g. a processor feed smaller than the wall being scaled up to it. A real
+    // scaler interpolates, so leave it LINEAR unless the cheap path is chosen;
+    // NEAREST here would point-replicate and keep edges artificially crisp.
+    const out=grab(dw,dh,!!nearest);
     const fcw=cw, fch=ch;
     pass(P.copy,cur,out,u=>{ gl.uniform2f(u.uSrc,fcw,fch); gl.uniform2f(u.uDst,dw,dh);
                              gl.uniform1i(u.uNearest,nearest?1:0); });
@@ -720,7 +902,12 @@ function ppmmDev(){ return S.ppmmCss*(window.devicePixelRatio||1); }
 // function of the wall's width in metres.
 function figMargin(){
   if(!S.figure || S.zoomMode!=='fit') return 0;
-  return Math.min(0.34, 1.55*0.28*1.75/Math.max(0.5,S.wallW));
+  // Measure against the WHOLE span, gaps included — an array is much wider than
+  // one screen, so sizing the margin from a single screen over-reserves and
+  // pushes the far end of the wall off the viewport.
+  const n=S.arrayOn?Math.max(2,S.arrayN|0):1;
+  const spanM=S.wallW*n + (n>1?S.arrayGap*(n-1):0);
+  return Math.min(0.34, 1.55*0.28*1.75/Math.max(0.5,spanM));
 }
 // Screen device-px per wall pixel.
 function cellPx(pitch, VW, VH){
@@ -788,7 +975,10 @@ function renderView(cv, off, pitch, ideal, dims){
         gl.uniform1f(u.uDecim,1); gl.uniform1f(u.uFill,S.fill);
         gl.uniform1f(u.uGain,1); gl.uniform1f(u.uAmb,amb);
         gl.uniform1f(u.uOffGain,offGain);
-        gl.uniform1i(u.uIdeal,1); gl.uniform1i(u.uGrid,0); });
+        gl.uniform1i(u.uIdeal,1); gl.uniform1i(u.uGrid,0);
+        // neutral, or the ideal reference would inherit the last view's array
+        gl.uniform1f(u.uArrPitch,0); gl.uniform1f(u.uScrNx,nx); gl.uniform1f(u.uGapPx,0);
+        gl.uniform2f(u.uCabPx,1,1); gl.uniform1f(u.uTileVar,0); });
       GLE.give(content);
     } else {
       const x0=clamp(Math.floor(-ox/cell),0,nx), y0=clamp(Math.floor(-oy/cell),0,ny);
@@ -800,11 +990,21 @@ function renderView(cv, off, pitch, ideal, dims){
       // covering its final partial group instead of sampling past the crop
       const lw=Math.max(1,Math.ceil(cw/decim)), lh=Math.max(1,Math.ceil(ch/decim));
 
-      // 1. exact area-average of the source down to LED density
-      const content=GLE.boxTo(srcT,S.srcW,S.srcH,
-                              Math.max(1,Math.round(r.w/decim)),
-                              Math.max(1,Math.round(r.h/decim)),
-                              S.scaler==='cheap');
+      // 1. exact area-average of the source down to LED density.
+      //    With a processor in the chain the content goes through ITS grid
+      //    first, so a feed smaller than the wall caps the detail that can ever
+      //    reach the panels -- the wall is then upscaled from that ceiling.
+      let content;
+      const tgtW=Math.max(1,Math.round(r.w/decim)), tgtH=Math.max(1,Math.round(r.h/decim));
+      if(S.procOn && (S.procW<r.w || S.procH<r.h)){
+        const pw=Math.max(1,Math.min(S.procW,Math.round(r.w))),
+              ph=Math.max(1,Math.min(S.procH,Math.round(r.h)));
+        const stage1=GLE.boxTo(srcT,S.srcW,S.srcH,pw,ph,S.scaler==='cheap');
+        content=GLE.boxTo(stage1.t,stage1.w,stage1.h,tgtW,tgtH,S.scaler==='cheap');
+        GLE.give(stage1);
+      } else {
+        content=GLE.boxTo(srcT,S.srcW,S.srcH,tgtW,tgtH,S.scaler==='cheap');
+      }
       // 2. place it into the LED crop (black outside the content)
       let led=GLE.grab(lw,lh,true);
       GLE.pass(GLE.P.place, content.t, led, u=>{
@@ -835,7 +1035,15 @@ function renderView(cv, off, pitch, ideal, dims){
         gl.uniform1f(u.uDecim,decim); gl.uniform1f(u.uFill,S.fill);
         gl.uniform1f(u.uGain,1/Math.max(.05,S.fill)); gl.uniform1f(u.uAmb,amb);
         gl.uniform1f(u.uOffGain,offGain);
-        gl.uniform1i(u.uIdeal,0); gl.uniform1i(u.uGrid,S.grid?1:0); });
+        gl.uniform1i(u.uIdeal,0); gl.uniform1i(u.uGrid,S.grid?1:0);
+        const sr=screenRes(pitch), gp=gapPx(pitch);
+        gl.uniform1f(u.uArrPitch, S.arrayOn ? sr.nx+gp : 0);
+        gl.uniform1f(u.uScrNx,    sr.nx);
+        gl.uniform1f(u.uGapPx,    gp);
+        const cpx = S.wallMode==='cab' ? cab().px : Math.max(8,Math.round(500/pitch));
+        const cpy = S.wallMode==='cab' ? cabPxY() : cpx;
+        gl.uniform2f(u.uCabPx, cpx, cpy);
+        gl.uniform1f(u.uTileVar, S.tileVar); });
       GLE.give(led);
       gridDrawn=S.grid;
     }
@@ -881,8 +1089,42 @@ function renderView(cv, off, pitch, ideal, dims){
   // Scale figure is instrument chrome, drawn AFTER the simulation and never
   // through it: running a person through gap/blur/ambient would claim "this is
   // what someone looks like standing there", which the tool cannot back.
+  if(S.cabGrid && !ideal) drawCabGrid(c,ox,oy,cell,pitch,nx,ny,VW,VH);
   const figVisible = S.figure ? drawFigure(c,ox,oy,cell,pitch,nx,ny,VW,VH) : true;
   return {cell,nx,ny,ox,oy,sTarget,sMon,decim,gridDrawn,amb,figVisible};
+}
+
+/* Where the wall physically breaks. Diagnostic chrome, not a simulated seam:
+   on good rental stock the seam itself is nearly invisible, while the useful
+   question is "where do the panel joins fall across my content" -- especially
+   whether one lands through a logo or a face. Tile-to-tile brightness spread is
+   the artifact that IS simulated, and that happens in the shader. */
+function drawCabGrid(c,ox,oy,cell,pitch,nx,ny,VW,VH){
+  const cpx = S.wallMode==='cab' ? cab().px : Math.max(8,Math.round(500/pitch));
+  const cpy = S.wallMode==='cab' ? cabPxY() : cpx;
+  const sx=cpx*cell, sy=cpy*cell;
+  if(sx<6||sy<6) return;                       // too dense to read as a grid
+  const sr=screenRes(pitch), gp=gapPx(pitch), n=S.arrayOn?Math.max(2,S.arrayN|0):1;
+  const top=Math.max(0,oy), bot=Math.min(VH,oy+ny*cell);
+  c.save();
+  c.strokeStyle='rgba(255,159,28,.28)'; c.lineWidth=1;
+  c.beginPath();
+  for(let s=0;s<n;s++){
+    const x0=ox+s*(sr.nx+gp)*cell, x1=x0+sr.nx*cell;
+    for(let x=x0;x<=x1+0.5;x+=sx)
+      if(x>=-1&&x<=VW+1){ c.moveTo(Math.round(x)+.5,top); c.lineTo(Math.round(x)+.5,bot); }
+    for(let y=oy;y<=oy+ny*cell+0.5;y+=sy)
+      if(y>=-1&&y<=VH+1){ c.moveTo(Math.max(0,x0),Math.round(y)+.5); c.lineTo(Math.min(VW,x1),Math.round(y)+.5); }
+  }
+  c.stroke();
+  if(n>1){                                     // screen outlines above the grid
+    c.strokeStyle='rgba(255,159,28,.85)'; c.lineWidth=2;
+    for(let s=0;s<n;s++){
+      const x0=ox+s*(sr.nx+gp)*cell;
+      c.strokeRect(Math.round(x0)+.5,Math.round(oy)+.5,Math.round(sr.nx*cell),Math.round(ny*cell));
+    }
+  }
+  c.restore();
 }
 
 /* A flat 1.75 m silhouette standing at the WALL PLANE, just outside the left
@@ -1121,6 +1363,53 @@ $('ambMode').onchange=e=>{ S.ambMode=e.target.value;
     c.onclick=()=>{ S.lux=v; $('lux').value=v; draw(); }; $('luxChips').appendChild(c); });
 $('tFig').onclick=e=>{ S.figure=!S.figure; e.target.classList.toggle('on',S.figure); draw(); };
 
+/* ---------- cabinets, signal chain, arrays ---------- */
+CABS.forEach((c,i)=>{ const o=document.createElement('option'); o.value=i; o.textContent=c.n;
+                      $('cabSel').appendChild(o); });
+$('cabSel').value=String(S.cabI);
+function cabRefresh(){
+  $('rowCustom').style.display = CABS[S.cabI].custom ? 'flex' : 'none';
+  const c=cab(), p=cabPitch(), {nx,ny}=nativeRes(S.pitchA);
+  $('cabHint').innerHTML =
+    `<b>${S.cabX} × ${S.cabY}</b> cabinets = <b>${S.wallW.toFixed(2)} × ${S.wallH.toFixed(2)} m</b>`+
+    ` = <b>${nx} × ${ny} px</b><br>true pitch <b>${p.toFixed(3)} mm</b>`+
+    ` (${c.px} px across ${c.mm} mm) — the nominal figure is a round-off.`;
+  syncPlan();
+}
+function setCabMode(cabMode){
+  S.wallMode = cabMode?'cab':'free';
+  $('cabUI').style.display  = cabMode?'block':'none';
+  $('freeUI').style.display = cabMode?'none':'block';
+  $('modeCab').classList.toggle('on',cabMode);
+  $('modeFree').classList.toggle('on',!cabMode);
+  if(cabMode) syncFromCabinets();
+  draw(); cabRefresh();
+}
+$('modeCab').onclick=()=>setCabMode(true);
+$('modeFree').onclick=()=>setCabMode(false);
+$('cabSel').onchange=e=>{ S.cabI=+e.target.value; syncFromCabinets(); draw(); cabRefresh(); };
+const cabNum=(id,key)=>{ $(id).oninput=e=>{ const v=parseFloat(e.target.value);
+  if(isFinite(v)&&v>0){ S[key]=Math.max(1,Math.round(v)); syncFromCabinets(); draw(); cabRefresh(); } }; };
+cabNum('cabX','cabX'); cabNum('cabY','cabY'); cabNum('cabMM','cabMM'); cabNum('cabPX','cabPX');
+
+$('tCabGrid').onclick=e=>{ S.cabGrid=!S.cabGrid; e.target.classList.toggle('on',S.cabGrid); draw(); };
+$('tProc').onclick=e=>{ S.procOn=!S.procOn; e.target.classList.toggle('on',S.procOn);
+  $('rowProc').style.display=S.procOn?'flex':'none';
+  $('rowProcCustom').style.display=(S.procOn&&$('procSel').value==='custom')?'flex':'none';
+  draw(); syncPlan(); };
+$('procSel').onchange=e=>{
+  if(e.target.value==='custom'){ $('rowProcCustom').style.display='flex'; }
+  else { $('rowProcCustom').style.display='none';
+         const [w,h]=e.target.value.split('x').map(Number); S.procW=w; S.procH=h;
+         $('procW').value=w; $('procH').value=h; }
+  draw(); syncPlan(); };
+$('procW').oninput=e=>{ const v=parseInt(e.target.value,10); if(v>0){S.procW=v;draw();syncPlan();} };
+$('procH').oninput=e=>{ const v=parseInt(e.target.value,10); if(v>0){S.procH=v;draw();syncPlan();} };
+$('tileVar').oninput=e=>{ S.tileVar=e.target.value/100; $('tileVarV').textContent=e.target.value+'%'; draw(); };
+$('tArray').onclick=e=>{ S.arrayOn=!S.arrayOn; e.target.classList.toggle('on',S.arrayOn); draw(); syncPlan(); };
+$('arrN').oninput=e=>{ const v=parseInt(e.target.value,10); if(v>=2){S.arrayN=Math.min(12,v);draw();syncPlan();} };
+$('arrGap').oninput=e=>{ const v=parseFloat(e.target.value); if(isFinite(v)&&v>=0){S.arrayGap=v;draw();syncPlan();} };
+
 function setDist(v){ S.dist=clamp(v,.3,200); $('dist').value=Math.min(60,S.dist); $('distN').value=S.dist.toFixed(1); $('distV').textContent=S.dist.toFixed(1)+' m'; draw(); }
 $('dist').oninput=e=>setDist(parseFloat(e.target.value));
 $('distN').oninput=e=>{ const v=parseFloat(e.target.value); if(isFinite(v)) setDist(v); };
@@ -1151,10 +1440,19 @@ function applyCal(persist){
   S.ppmmCss=px/85.6;
   $('calCard').style.width=px+'px';
   $('calCard').style.height=(px*53.98/85.6)+'px';
+  $('calCardBig').style.width=px+'px';
+  $('calCardBig').style.height=(px*53.98/85.6)+'px';
   $('calV').textContent=S.ppmmCss.toFixed(2);
+  $('calV2').textContent=S.ppmmCss.toFixed(2);
   const dpi=(S.ppmmCss*25.4).toFixed(0);
-  $('calHint').innerHTML=`≈ <b>${dpi} CSS dpi</b>. Eye at ${S.monDist} mm resolves ${(MM_PER_M*S.monDist/1000).toFixed(2)} mm on this monitor.`
+  const txt=`≈ <b>${dpi} CSS dpi</b>. Eye at ${S.monDist} mm resolves ${(MM_PER_M*S.monDist/1000).toFixed(2)} mm on this monitor.`
     + (S.calibrated?'':'<br><b style="color:var(--warn)">Not yet calibrated</b> — 1:1 and eye-match are guesses until you match the card.');
+  $('calHint').innerHTML=txt; $('calHint2').innerHTML=txt;
+  $('calBigNote').textContent=dpi+' dpi';
+  // The rail-embedded card cannot exceed the rail; say so rather than showing a
+  // clipped card the user would calibrate against.
+  const railInner=$('rail').getBoundingClientRect().width-32;
+  $('calCard').style.outline = px>railInner ? '1px dashed var(--bad)' : 'none';
   if(persist){
     S.calibrated=true;
     // Unguarded this throws under file:// with storage disabled, which would
@@ -1164,10 +1462,31 @@ function applyCal(persist){
   }
   draw();
 }
-$('calR').oninput=()=>applyCal(true);
-$('monDist').oninput=e=>{ const v=parseFloat(e.target.value); if(isFinite(v)&&v>100){S.monDist=v;applyCal(true);} };
+$('calR').oninput=()=>{ $('calR2').value=$('calR').value; applyCal(true); };
+$('calR2').oninput=()=>{ $('calR').value=$('calR2').value; applyCal(true); };
+const setMon=v=>{ if(isFinite(v)&&v>100){ S.monDist=v; $('monDist').value=v; $('monDist2').value=v; applyCal(true);} };
+$('monDist').oninput =e=>setMon(parseFloat(e.target.value));
+$('monDist2').oninput=e=>setMon(parseFloat(e.target.value));
+$('calOpen').onclick=()=>{ $('calModal').classList.add('on'); applyCal(false); };
+$('calDone').onclick=()=>$('calModal').classList.remove('on');
 try{ const c=JSON.parse(localStorage.getItem('squint.cal')||'null');
-     if(c){ $('calR').value=c.px; $('monDist').value=c.d; S.monDist=c.d; S.calibrated=!!c.cal; } }catch(e){}
+     if(c){ $('calR').value=c.px; $('calR2').value=c.px; $('monDist').value=c.d;
+            $('monDist2').value=c.d; S.monDist=c.d; S.calibrated=!!c.cal; } }catch(e){}
+
+/* Resizable sidebar, persisted. */
+(function(){
+  const setW=w=>{ w=clamp(w,240,Math.min(1400,window.innerWidth-320));
+    document.documentElement.style.setProperty('--railw',w+'px');
+    try{ localStorage.setItem('squint.railw',String(w)); }catch(e){}
+    draw(); };
+  try{ const w=+localStorage.getItem('squint.railw'); if(w>=240) setW(w); }catch(e){}
+  let rd=null;
+  $('railGrip').addEventListener('mousedown',e=>{ e.preventDefault();
+    rd={x:e.clientX,w:$('rail').getBoundingClientRect().width};
+    document.body.style.cursor='col-resize'; });
+  window.addEventListener('mousemove',e=>{ if(rd) setW(rd.w+(e.clientX-rd.x)); });
+  window.addEventListener('mouseup',()=>{ if(rd){ rd=null; document.body.style.cursor=''; } });
+})();
 
 /* ---------- file loading ---------- */
 const vid=$('vid');
@@ -1391,7 +1710,86 @@ function composeExport(btn){
 /* ---------- debug / scripting handle ---------- */
 window.SQUINT = { S, nativeRes, contentRect, cellPx, draw, ppmmDev, viewUnder,
                   geo:()=>geoA, geoB:()=>geoB, ARCMIN_RAD, MM_PER_M,
-                  GLE, selftest, ambientFraction, contrastRatio, offAxisGain };
+                  GLE, selftest, ambientFraction, contrastRatio, offAxisGain,
+                  CABS, cab, cabPitch, cabPxY, syncFromCabinets, screenRes,
+                  effectiveRes, gapPx, syncPlan, exportTemplate };
+
+/* ---------- build plan ----------
+   The answer to "what size do I build the comp?", stated before the job starts
+   rather than discovered during load-in. */
+function syncPlan(){
+  const pitch=S.pitchA, {nx,ny}=nativeRes(pitch), sr=screenRes(pitch);
+  const eff=effectiveRes(pitch), n=S.arrayOn?Math.max(2,S.arrayN|0):1;
+  const c=cab(), gp=gapPx(pitch);
+  const L=[];
+  L.push(`comp size      <b class="acc">${nx} × ${ny}</b>`);
+  if(n>1){
+    L.push(`per screen     ${sr.nx} × ${sr.ny}  (${n} screens)`);
+    L.push(`gap            ${gp} px  ·  ${S.arrayGap.toFixed(2)} m each`);
+    const lost=gp*(n-1)*ny;
+    L.push(`lost in gaps   <span class="no">${((gp*(n-1))/nx*100).toFixed(1)}%</span> of the canvas width`);
+  }
+  if(S.wallMode==='cab'){
+    L.push(`cabinets       ${S.cabX} × ${S.cabY}${n>1?` per screen (${S.cabX*n} total)`:''} = ${S.cabX*S.cabY*n}`);
+    L.push(`true pitch     ${cabPitch().toFixed(3)} mm  (${c.px} px / ${c.mm} mm)`);
+  } else {
+    L.push(`pitch          ${pitch.toFixed(2)} mm  <span class="mid">(free size — not cabinet-quantised)</span>`);
+  }
+  L.push(`physical       ${(S.wallW*n + S.arrayGap*(n-1)*(n>1?1:0)).toFixed(2)} × ${S.wallH.toFixed(2)} m overall`);
+  if(S.procOn){
+    const cls=eff.limited?'no':'ok';
+    L.push(`feed           ${S.procW} × ${S.procH}`);
+    L.push(`effective      <span class="${cls}">${eff.ex} × ${eff.ey}</span>`+
+           (eff.limited?`  — using <span class="no">${(eff.ex/nx*100).toFixed(0)}%</span> of the wall's width`:'  — feed covers the wall'));
+  }
+  if(S.src) L.push(`your master    ${S.srcW} × ${S.srcH} → ${(Math.round(contentRect(nx,ny).w)/S.srcW*100).toFixed(0)}% scale`);
+  $('planOut').innerHTML=L.join('<br>');
+}
+
+/* A guide at the wall's exact native resolution: cabinet grid, centre marks,
+   safe area and the numbers stamped on it, to drop into a comp as reference. */
+function exportTemplate(){
+  const pitch=S.pitchA, {nx,ny}=nativeRes(pitch), sr=screenRes(pitch);
+  const n=S.arrayOn?Math.max(2,S.arrayN|0):1, gp=gapPx(pitch);
+  if(nx*ny>80e6) return toast('Native grid too large to write a guide');
+  const cvT=mk(); cvT.width=nx; cvT.height=ny;
+  const c=cvT.getContext('2d');
+  c.fillStyle='#0b0d10'; c.fillRect(0,0,nx,ny);
+  const cpx=S.wallMode==='cab'?cab().px:Math.max(8,Math.round(500/pitch));
+  const cpy=S.wallMode==='cab'?cabPxY():cpx;
+  for(let s=0;s<n;s++){
+    const x0=s*(sr.nx+gp), x1=x0+sr.nx;
+    c.fillStyle='#14181d'; c.fillRect(x0,0,sr.nx,ny);
+    c.strokeStyle='rgba(255,159,28,.35)'; c.lineWidth=Math.max(1,nx/2000);
+    c.beginPath();
+    for(let x=x0;x<=x1;x+=cpx){ c.moveTo(x,0); c.lineTo(x,ny); }
+    for(let y=0;y<=ny;y+=cpy){ c.moveTo(x0,y); c.lineTo(x1,y); }
+    c.stroke();
+    c.strokeStyle='rgba(255,159,28,.9)'; c.lineWidth=Math.max(2,nx/900);
+    c.strokeRect(x0,0,sr.nx,ny);
+    c.strokeStyle='rgba(255,255,255,.35)'; c.lineWidth=Math.max(1,nx/1600);
+    c.beginPath(); c.moveTo(x0+sr.nx/2,0); c.lineTo(x0+sr.nx/2,ny);
+    c.moveTo(x0,ny/2); c.lineTo(x1,ny/2); c.stroke();
+  }
+  c.strokeStyle='rgba(61,220,151,.55)'; c.lineWidth=Math.max(1,nx/1400);
+  c.setLineDash([nx/120,nx/120]);
+  c.strokeRect(nx*0.05,ny*0.05,nx*0.90,ny*0.90);        // 5% safe area
+  c.setLineDash([]);
+  const fs=Math.max(14,Math.round(ny*0.035));
+  c.fillStyle='#ff9f1c'; c.font=`600 ${fs}px Segoe UI, sans-serif`;
+  c.fillText(`${nx} × ${ny}`, fs*0.6, fs*1.5);
+  c.fillStyle='#8b939e'; c.font=`${Math.round(fs*0.55)}px Consolas, monospace`;
+  c.fillText(`${S.wallMode==='cab'?`${S.cabX}×${S.cabY} cabinets · ${cabPitch().toFixed(3)} mm`
+              :`${pitch.toFixed(2)} mm pitch`}`+
+             `${n>1?` · ${n} screens · ${gp}px gaps`:''}`+
+             `${S.procOn?` · fed ${S.procW}×${S.procH}`:''}`+
+             ` · dashed line = 5% safe area`, fs*0.6, fs*2.3);
+  cvT.toBlob(bl=>{ if(!bl) return toast('Could not write the guide');
+    const u=URL.createObjectURL(bl), a=document.createElement('a');
+    a.href=u; a.download=`SQUINT_layout_${nx}x${ny}.png`; a.click();
+    setTimeout(()=>URL.revokeObjectURL(u),4000); toast('Layout guide saved'); },'image/png');
+}
+$('tplBtn').onclick=exportTemplate;
 
 /* ---------- self-test ----------
    Runs the REAL pipeline on synthetic patterns at boot and checks two things
@@ -1487,8 +1885,10 @@ if(!GLE.live){
 } else {
   applyCal(false);
   setDist(5);
+  setCabMode(true);        // event walls are cabinet-built by default
   draw();
   selftest();
+  cabRefresh();
 }
 </script>
 </body>

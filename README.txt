@@ -25,9 +25,12 @@ is affected. Serve the folder instead:
     python -m http.server 8731
     then open  http://127.0.0.1:8731/squint.html
 
-CALIBRATE IT ONCE. Open "Monitor calibration", drag until the box matches a real
-credit card held against the screen, and set your viewing distance. Until you
-do, the top bar reads UNCALIBRATED and the 1:1 and eye-match modes are guesses.
+CALIBRATE IT ONCE. Monitor calibration -> "Calibrate full-screen", drag until
+the box matches a real credit card held against the screen, and set your eye
+distance. It opens over the canvas because a credit card is 85.6 mm, which on a
+dense monitor is well over 400 px - wider than any sensible sidebar. The
+sidebar itself is also draggable from its right edge. Until you calibrate, the
+top bar reads UNCALIBRATED and 1:1 and eye-match are guesses.
 
 
 THE PIPELINE
@@ -83,6 +86,46 @@ How much this mattered: the old canvas-2D build fused a 50/50 black-and-white
 field to sRGB 131. The physically correct answer is 188. The test card carries
 that patch with both reference blocks beside it, so you can check the claim
 yourself in about five seconds.
+
+
+EVENT WALLS: CABINETS, FEEDS AND ARRAYS
+---------------------------------------
+An event wall is not a rectangle you type dimensions into. It is a grid of
+cabinets, and the pitch is DERIVED from the tile, not chosen.
+
+The standard rental tile is 500 x 500 mm. At "2.6 mm" it carries 192 x 192
+pixels, so the true pitch is 500/192 = 2.604 mm and "2.6" is a round-off. A
+12 x 6 cabinet wall is therefore exactly 2304 x 1152. Typing 6 m / 2.6 mm
+instead gives 2308 x 1154 - a near-miss that makes your comp size, your 1:1
+mapping and every downstream number slightly wrong.
+
+BUILD FROM CABINETS is the default. Pick a tile, set cabinets across and down,
+and the wall metres, the true pitch and the exact native resolution all derive.
+Free size is still there for quick what-ifs, and says so when you use it.
+
+PROCESSOR LIMIT is the one nobody models. A wall is fed from a processor
+output. If that feed is smaller than the wall's native grid, the wall is being
+upscaled and its real ceiling is the feed, not the panel count. A 2304-wide wall
+fed 1920 x 1080 is a 1920-wide wall that happens to contain more LEDs - you are
+using 83% of what you rented, and on a 3-screen array it can fall past 50%.
+Turning this on genuinely resamples the content through the feed's grid, so you
+see the softening, not just a warning.
+
+SCREEN ARRAY maps one canvas across several physical screens - main plus IMAG
+sides, a row of pillars - with the gaps modelled as what they are: content
+mapped into a gap is not shown at all. The build plan tells you what percentage
+of your canvas lands in the void. Each screen keeps its own cabinet grid.
+
+CABINET GRID draws where the wall physically breaks. It is diagnostic chrome,
+not a simulated seam: on good stock the seam itself is nearly invisible, while
+the question that matters is whether a join lands through a logo or a face.
+TILE VARIANCE is the artifact that IS simulated - the few percent brightness
+spread of mixed rental stock, which large flat gradients reveal.
+
+BUILD PLAN answers "what size do I build the comp?" before the job starts, and
+"Download layout guide PNG" writes a reference at the wall's exact native
+resolution with the cabinet grid, screen outlines, centre marks, a 5% safe area
+and the numbers stamped on it. Drop it into your comp as a guide layer.
 
 
 THE TWO DISTANCES
