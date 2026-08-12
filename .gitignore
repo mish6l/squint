@@ -1,0 +1,9 @@
+# Exported comparison sheets land wherever the browser puts them, but if any
+# get dropped in here they are outputs, not sources.
+SQUINT_*.png
+
+# OS / editor noise
+Thumbs.db
+desktop.ini
+.DS_Store
+*.swp

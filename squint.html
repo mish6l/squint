@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SQUINT — LED pitch &amp; acuity simulator</title>
+<style>
+:root{
+  --bg:#0e1013; --panel:#16191e; --panel2:#1d2127; --line:#2a2f37;
+  --ink:#e8ebef; --dim:#8b939e; --dim2:#5f6873;
+  --acc:#ff9f1c; --acc2:#3ddc97; --bad:#ff5c5c; --warn:#ffc93c;
+  --mono:ui-monospace,"Cascadia Mono","Consolas",monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  background:var(--bg);color:var(--ink);
+  font:13px/1.45 "Segoe UI",system-ui,sans-serif;
+  display:flex;overflow:hidden;
+}
+button,input,select{font:inherit;color:inherit}
+
+/* ---------- rail ---------- */
+#rail{
+  width:302px;flex:0 0 302px;background:var(--panel);
+  border-right:1px solid var(--line);
+  display:flex;flex-direction:column;overflow:hidden;
+}
+#brand{
+  padding:14px 16px 12px;border-bottom:1px solid var(--line);
+  display:flex;align-items:baseline;gap:9px;
+}
+#brand b{font-size:19px;letter-spacing:.22em;font-weight:600}
+#brand span{font-size:10px;color:var(--dim2);letter-spacing:.09em;text-transform:uppercase}
+#railScroll{overflow-y:auto;flex:1;padding-bottom:20px}
+#railScroll::-webkit-scrollbar{width:9px}
+#railScroll::-webkit-scrollbar-thumb{background:#2b313a;border-radius:5px}
+
+.sec{border-bottom:1px solid var(--line)}
+.sec>h3{
+  margin:0;padding:9px 16px;font-size:10px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--dim);font-weight:600;
+  cursor:pointer;user-select:none;display:flex;justify-content:space-between;
+}
+.sec>h3::after{content:"–";color:var(--dim2)}
+.sec.closed>h3::after{content:"+"}
+.sec.closed .secBody{display:none}
+.secBody{padding:2px 16px 14px}
+
+.row{display:flex;align-items:center;gap:8px;margin:7px 0}
+.row label{flex:0 0 84px;color:var(--dim);font-size:11.5px}
+.row.wide label{flex:0 0 auto}
+input[type=number],input[type=text],select{
+  flex:1;min-width:0;background:var(--panel2);border:1px solid var(--line);
+  border-radius:4px;padding:5px 7px;font-family:var(--mono);font-size:12px;
+}
+input[type=number]:focus,select:focus{outline:none;border-color:var(--acc)}
+input[type=range]{flex:1;min-width:0;accent-color:var(--acc);height:18px}
+.val{flex:0 0 62px;text-align:right;font-family:var(--mono);font-size:12px;color:var(--acc)}
+.hint{color:var(--dim2);font-size:10.5px;margin:5px 0 0;line-height:1.4}
+
+.btn{
+  background:var(--panel2);border:1px solid var(--line);border-radius:4px;
+  padding:6px 10px;cursor:pointer;font-size:12px;
+}
+.btn:hover{border-color:#3d444f;background:#232830}
+.btn.on{background:var(--acc);border-color:var(--acc);color:#1a1205;font-weight:600}
+.btn.wide{width:100%;text-align:center}
+.btn.acc{border-color:#4a3a18;color:var(--acc)}
+.seg{display:flex;gap:4px;margin:7px 0}
+.seg .btn{flex:1;text-align:center;padding:6px 4px;font-size:11.5px}
+
+.chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.chip{
+  background:var(--panel2);border:1px solid var(--line);border-radius:3px;
+  padding:3px 7px;font-family:var(--mono);font-size:11px;cursor:pointer;color:var(--dim);
+}
+.chip:hover{border-color:var(--acc);color:var(--ink)}
+
+/* ---------- stage ---------- */
+#main{flex:1;display:flex;flex-direction:column;min-width:0}
+#topbar{
+  height:44px;flex:0 0 44px;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:14px;padding:0 14px;background:var(--panel);
+}
+#topbar .seg{margin:0}
+#topbar .seg .btn{padding:5px 12px;flex:0 0 auto}
+.spacer{flex:1}
+#zoomLbl{font-family:var(--mono);font-size:11.5px;color:var(--dim)}
+
+#stage{
+  flex:1;position:relative;background:#000;overflow:hidden;
+  display:flex;gap:2px;min-height:0;
+}
+.viewWrap{flex:1;position:relative;min-width:0;overflow:hidden;background:#000}
+canvas.view{position:absolute;inset:0;width:100%;height:100%;display:block}
+.vlabel{
+  position:absolute;top:10px;left:10px;z-index:5;
+  background:rgba(10,12,15,.82);border:1px solid var(--line);border-radius:4px;
+  padding:5px 9px;font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;
+  pointer-events:none;white-space:pre;
+}
+#wipeBar{
+  position:absolute;top:0;bottom:0;width:2px;background:var(--acc);z-index:6;
+  cursor:ew-resize;display:none;
+}
+#wipeBar::after{
+  content:"◀ ▶";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:var(--acc);color:#1a1205;font-size:10px;padding:3px 6px;border-radius:3px;
+}
+#measureBox{
+  position:absolute;border:1px solid var(--acc2);background:rgba(61,220,151,.12);
+  z-index:7;display:none;pointer-events:none;
+}
+#structBanner{
+  position:absolute;right:10px;bottom:10px;z-index:8;display:none;max-width:340px;
+  background:rgba(255,201,60,.14);border:1px solid var(--warn);color:var(--warn);
+  border-radius:4px;padding:7px 10px;font-size:11.5px;line-height:1.45;pointer-events:none;
+}
+#drop{
+  position:absolute;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;
+  flex-direction:column;gap:14px;background:rgba(8,10,13,.94);text-align:center;padding:30px;
+}
+#drop.hide{display:none}
+#drop h2{margin:0;font-size:15px;font-weight:500;letter-spacing:.03em}
+#drop p{margin:0;color:var(--dim);max-width:440px;font-size:12.5px;line-height:1.6}
+#drop.over{background:rgba(255,159,28,.10);outline:2px dashed var(--acc);outline-offset:-14px}
+
+/* ---------- readout ---------- */
+#readout{
+  flex:0 0 auto;border-top:1px solid var(--line);background:var(--panel);
+  display:flex;flex-wrap:wrap;gap:0;
+}
+.ro{padding:8px 16px;border-right:1px solid var(--line);min-width:118px}
+.ro b{display:block;font-family:var(--mono);font-size:14px;font-weight:500;letter-spacing:.01em}
+.ro span{display:block;font-size:9.5px;color:var(--dim2);text-transform:uppercase;letter-spacing:.09em;margin-top:2px}
+.ok{color:var(--acc2)} .mid{color:var(--warn)} .no{color:var(--bad)} .acc{color:var(--acc)}
+
+#calCard{
+  height:0;background:linear-gradient(135deg,#2a3038,#1a1e24);
+  border:1px solid #454d59;border-radius:6px;margin:8px 0 4px;
+  display:flex;align-items:flex-end;padding:6px;color:var(--dim2);font-size:9px;
+}
+#toast{
+  position:fixed;bottom:18px;left:50%;transform:translateX(-50%);
+  background:var(--acc);color:#1a1205;padding:8px 16px;border-radius:5px;
+  font-size:12.5px;font-weight:600;z-index:99;opacity:0;transition:opacity .25s;pointer-events:none;
+}
+#toast.show{opacity:1}
+/* Kept out of layout but NOT display:none — Chrome defers loading hidden media. */
+video{position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-events:none}
+</style>
+</head>
+<body>
+
+<div id="rail">
+  <div id="brand"><b>SQUINT</b><span>LED pitch &amp; acuity</span></div>
+  <div id="railScroll">
+
+    <div class="sec" data-k="wall">
+      <h3>Wall</h3>
+      <div class="secBody">
+        <div class="row"><label>Width</label><input type="number" id="wallW" value="6" step="0.1" min="0.1"><span class="val">m</span></div>
+        <div class="row"><label>Height</label><input type="number" id="wallH" value="3" step="0.1" min="0.1"><span class="val">m</span></div>
+        <div class="row"><label>Pitch A</label><input type="number" id="pitchA" value="2.9" step="0.1" min="0.4"><span class="val">mm</span></div>
+        <div class="chips" id="pitchChips"></div>
+        <div class="row" id="rowPitchB"><label>Pitch B</label><input type="number" id="pitchB" value="6" step="0.1" min="0.4"><span class="val">mm</span></div>
+        <div class="row"><label>Fill factor</label><input type="range" id="fill" min="20" max="100" value="50"><span class="val" id="fillV">50%</span></div>
+        <p class="hint">Fill factor = lit LED area vs. pitch cell. SMD ≈ 40–55%, GOB/COB ≈ 70–90%. Drives the inter-pixel gap only — mean brightness is held constant, as on a calibrated wall.</p>
+        <div class="row"><label>Ambient wash</label><input type="range" id="amb" min="0" max="45" value="0"><span class="val" id="ambV">0%</span></div>
+        <p class="hint">Light falling on the panel face lifts blacks and crushes contrast. 0% = blackout room. 10–20% = lit hall. 30%+ = daylight or a heavily lit booth. This is what kills dark, moody grades on the floor.</p>
+      </div>
+    </div>
+
+    <div class="sec" data-k="content">
+      <h3>Content</h3>
+      <div class="secBody">
+        <button class="btn wide acc" id="loadBtn">Load image or video…</button>
+        <input type="file" id="file" accept="image/*,video/*" hidden>
+        <div class="row" style="margin-top:9px"><label>Mapping</label>
+          <select id="fitMode">
+            <option value="fit">Fit (letterbox)</option>
+            <option value="fill">Fill (crop)</option>
+            <option value="stretch">Stretch</option>
+            <option value="one">1:1 native px</option>
+          </select>
+        </div>
+        <div class="row"><label>Scaler</label>
+          <select id="scaler">
+            <option value="good">Good processor (filtered)</option>
+            <option value="cheap">Cheap processor (nearest)</option>
+          </select>
+        </div>
+        <div class="seg" id="vidCtl" style="display:none">
+          <button class="btn" id="playBtn">▶ Play</button>
+          <button class="btn" id="loopBtn">Loop</button>
+        </div>
+        <div class="row" id="seekRow" style="display:none"><label>Frame</label><input type="range" id="seek" min="0" max="1000" value="0"><span class="val" id="seekV">0s</span></div>
+      </div>
+    </div>
+
+    <div class="sec" data-k="viewer">
+      <h3>Viewer</h3>
+      <div class="secBody">
+        <div class="row"><label>Distance</label><input type="range" id="dist" min="0.5" max="60" step="0.1" value="5"><span class="val" id="distV">5.0 m</span></div>
+        <div class="row"><label></label><input type="number" id="distN" value="5" step="0.5" min="0.3"><span class="val">m</span></div>
+        <div class="seg">
+          <button class="btn" data-jump="near">Front row</button>
+          <button class="btn" data-jump="mid">Mid</button>
+          <button class="btn" data-jump="far">Back</button>
+        </div>
+        <p class="hint" id="distHint"></p>
+      </div>
+    </div>
+
+    <div class="sec" data-k="render">
+      <h3>Render</h3>
+      <div class="secBody">
+        <div class="seg">
+          <button class="btn on" id="tGrid">Pixel gap</button>
+          <button class="btn on" id="tBlur">Eye acuity</button>
+        </div>
+        <div class="row"><label>Zoom</label>
+          <select id="zoomMode">
+            <option value="eye">Eye-match (WYSIWYG)</option>
+            <option value="fit">Fit whole wall</option>
+            <option value="one">1:1 physical</option>
+            <option value="free">Free</option>
+          </select>
+        </div>
+        <div class="row"><label>Free zoom</label><input type="range" id="zoomF" min="-30" max="60" value="0"><span class="val" id="zoomFV">1.0×</span></div>
+        <p class="hint">Eye-match scales the wall so its angular size on your monitor equals the real wall's at the viewer distance — what you see is what the audience sees. Scroll to zoom, drag to pan.</p>
+      </div>
+    </div>
+
+    <div class="sec" data-k="measure">
+      <h3>Legibility measure</h3>
+      <div class="secBody">
+        <button class="btn wide" id="measBtn">Measure a feature (drag on view)</button>
+        <div id="measOut" style="margin-top:9px;font-family:var(--mono);font-size:11.5px;color:var(--dim);line-height:1.7"></div>
+        <p class="hint">Drag a box over a cap-height letter or the thinnest element that must read. Verdict uses wall-pixel count and angular height in arcminutes.</p>
+      </div>
+    </div>
+
+    <div class="sec closed" data-k="cal">
+      <h3>Monitor calibration</h3>
+      <div class="secBody">
+        <p class="hint" style="margin-top:0">Drag until the box is exactly the size of a real credit card. Needed for 1:1 and eye-match accuracy.</p>
+        <div id="calCard">85.60 × 53.98 mm</div>
+        <div class="row"><label>Card width</label><input type="range" id="calR" min="180" max="900" value="324"><span class="val" id="calV">3.78</span></div>
+        <div class="row"><label>Your dist.</label><input type="number" id="monDist" value="600" step="25"><span class="val">mm</span></div>
+        <p class="hint" id="calHint"></p>
+      </div>
+    </div>
+
+    <div class="sec" data-k="out">
+      <h3>Export</h3>
+      <div class="secBody">
+        <button class="btn wide acc" id="pngBtn">Save comparison PNG</button>
+        <p class="hint">Bakes in wall size, pitch, distance and native resolution as a caption strip — drop straight into a client deck.</p>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div id="main">
+  <div id="topbar">
+    <div class="seg">
+      <button class="btn on" data-mode="sim">Simulate</button>
+      <button class="btn" data-mode="wipe">Wipe vs. source</button>
+      <button class="btn" data-mode="ab">A / B pitch</button>
+    </div>
+    <span class="spacer"></span>
+    <span id="zoomLbl"></span>
+  </div>
+
+  <div id="stage">
+    <div class="viewWrap" id="wrapA">
+      <canvas class="view" id="cvA"></canvas>
+      <div class="vlabel" id="labA"></div>
+    </div>
+    <div class="viewWrap" id="wrapB" style="display:none">
+      <canvas class="view" id="cvB"></canvas>
+      <div class="vlabel" id="labB"></div>
+    </div>
+    <div id="wipeBar"></div>
+    <div id="measureBox"></div>
+    <div id="structBanner"></div>
+    <div id="drop">
+      <h2>Drop an image or video onto the wall</h2>
+      <p>SQUINT downsamples your content to the wall's real native grid, draws the physical LED gap, then filters it through the eye's 1-arcminute acuity limit at the viewer distance you set. Nothing leaves this machine.</p>
+      <button class="btn acc" id="drop2">Choose a file</button>
+    </div>
+  </div>
+
+  <div id="readout">
+    <div class="ro"><b id="roNative">—</b><span>Native res</span></div>
+    <div class="ro"><b id="roPx">—</b><span>Total pixels</span></div>
+    <div class="ro"><b id="roScale">—</b><span>Content scale</span></div>
+    <div class="ro"><b id="roEye">—</b><span>Eye resolves</span></div>
+    <div class="ro"><b id="roGrid">—</b><span>Pixel structure</span></div>
+    <div class="ro"><b id="roRetina">—</b><span>Acuity limit</span></div>
+    <div class="ro"><b id="roSafe">—</b><span>Structure-free at</span></div>
+    <div class="ro"><b id="roSub">—</b><span>Wall subtends</span></div>
+  </div>
+</div>
+
+<video id="vid" playsinline muted loop preload="auto"></video>
+<div id="toast"></div>
+
+<script>
+"use strict";
+/* =====================================================================
+   SQUINT — LED pixel-pitch + visual-acuity simulator
+   Physics:
+     Visual acuity limit  θ = 1 arcmin = 2.909e-4 rad  (20/20 vision)
+     Smallest resolvable detail at distance D:  r = θ·D  ≈ 0.291 mm per metre
+     Pixel structure disappears when pitch < r  →  D ≥ 3.44 × pitch(mm)  [metres]
+     Acuity modelled as a Gaussian LPF with FWHM = r  →  σ = r / 2.355
+   ===================================================================== */
+
+const CROP_CAP   = 4096;                 // max native-crop buffer edge, in px
+// Canvas 2D filters carry the acuity model. Without them the tool would render
+// an unblurred image while still claiming to simulate the eye — detect, warn.
+const HAS_FILTER = (()=>{ try{ const c=document.createElement('canvas').getContext('2d');
+  c.filter='blur(1px)'; return c.filter==='blur(1px)'; }catch(e){ return false; } })();
+const ARCMIN_RAD = 2.908882e-4;          // 1 arcminute in radians
+const MM_PER_M   = 0.2909;               // resolvable mm of detail per metre of distance
+const FWHM       = 2.3548;
+
+const $ = id => document.getElementById(id);
+const clamp = (v,a,b) => v<a?a:v>b?b:v;
+
+const S = {
+  wallW:6, wallH:3, pitchA:2.9, pitchB:6, fill:.5,
+  dist:5, fitMode:'fit', scaler:'good', ambient:0, absBlur:false, calibrated:false,
+  grid:true, blur:true, zoomMode:'eye', zoomFree:1,
+  panX:0, panY:0, mode:'sim', wipe:.5,
+  ppmmCss:324/85.6, monDist:600,
+  src:null, srcW:0, srcH:0, isVideo:false, name:'—'
+};
+
+/* ---------- scratch canvases ---------- */
+const mk = () => document.createElement('canvas');
+const tmp=[mk(),mk()], contentCv=mk(), cropCv=mk(), offA=mk(), offB=mk();
+const idealCv=mk(), idealOff=mk();   // offscreen reference wall for wipe mode
+
+/* ================= geometry ================= */
+function nativeRes(pitch){
+  return { nx: Math.max(1,Math.round(S.wallW*1000/pitch)),
+           ny: Math.max(1,Math.round(S.wallH*1000/pitch)) };
+}
+// Where the content lands inside the native grid, in native pixels.
+function contentRect(nx,ny){
+  if(!S.src) return {x:0,y:0,w:nx,h:ny};
+  const ar = S.srcW/S.srcH, wr = nx/ny;
+  let w,h;
+  if(S.fitMode==='stretch'){ w=nx; h=ny; }
+  else if(S.fitMode==='one'){ w=S.srcW; h=S.srcH; }
+  else {
+    const cover = S.fitMode==='fill';
+    const wider = ar>wr;
+    if(wider===cover){ h=ny; w=ny*ar; } else { w=nx; h=nx/ar; }
+  }
+  return { x:(nx-w)/2, y:(ny-h)/2, w, h };
+}
+
+/* High-quality progressive downscale (what a decent processor does). */
+function scaleInto(out, src, sw, sh, dw, dh, smooth){
+  dw=Math.max(1,Math.round(dw)); dh=Math.max(1,Math.round(dh));
+  let cur=src, cw=sw, ch=sh, i=0;
+  if(smooth){
+    while(cw>dw*2 || ch>dh*2){
+      const nw=Math.max(dw,Math.round(cw/2)), nh=Math.max(dh,Math.round(ch/2));
+      if(nw===cw && nh===ch) break;
+      const t=tmp[i++%2]; t.width=nw; t.height=nh;
+      const c=t.getContext('2d');
+      c.imageSmoothingEnabled=true; c.imageSmoothingQuality='high';
+      c.drawImage(cur,0,0,cw,ch,0,0,nw,nh);
+      cur=t; cw=nw; ch=nh;
+    }
+  }
+  out.width=dw; out.height=dh;
+  const o=out.getContext('2d');
+  o.imageSmoothingEnabled=smooth; o.imageSmoothingQuality='high';
+  o.drawImage(cur,0,0,cw,ch,0,0,dw,dh);
+  return out;
+}
+
+/* Build the native-grid crop [x0,y0,cw,ch] of the wall. This is the honest
+   ceiling of what the panel can physically display. */
+// `f` decimates the buffer when the visible native region is too large to
+// allocate (big walls: 30x8 m at 2.6 mm is 11538x3077 native). f>1 only ever
+// happens when cell<1, i.e. when one screen pixel already covers several wall
+// pixels and the grid is physically invisible, so filtering down is the
+// correct approximation rather than a compromise.
+function buildNativeCrop(pitch, x0,y0,cw,ch,f){
+  const {nx,ny}=nativeRes(pitch);
+  const r=contentRect(nx,ny);
+  const bw=Math.max(1,Math.round(cw/f)), bh=Math.max(1,Math.round(ch/f));
+  // Setting width/height reallocates the backing store; during video playback
+  // that happens every frame, so only touch it when the size really changed.
+  if(cropCv.width!==bw)  cropCv.width=bw;
+  if(cropCv.height!==bh) cropCv.height=bh;
+  const c=cropCv.getContext('2d');
+  c.fillStyle='#000'; c.fillRect(0,0,bw,bh);
+  if(!S.src) return cropCv;
+  const smooth = S.scaler==='good' || f>1;
+  let img=S.src, iw=S.srcW, ih=S.srcH;
+  // Pre-resample the source to its wall-native size when downscaling.
+  if(f===1 && r.w < S.srcW && r.w<=8192 && r.h<=8192){
+    scaleInto(contentCv,S.src,S.srcW,S.srcH,r.w,r.h,smooth);
+    img=contentCv; iw=contentCv.width; ih=contentCv.height;
+  }
+  c.imageSmoothingEnabled=smooth; c.imageSmoothingQuality='high';
+  c.drawImage(img,0,0,iw,ih, (r.x-x0)/f, (r.y-y0)/f, r.w/f, r.h/f);
+  return cropCv;
+}
+
+/* ================= view scale ================= */
+function ppmmDev(){ return S.ppmmCss*(window.devicePixelRatio||1); }
+
+// Screen device-px per wall pixel.
+function cellPx(pitch, VW, VH){
+  const {nx,ny}=nativeRes(pitch);
+  if(S.zoomMode==='fit')  return Math.min(VW/nx, VH/ny);
+  if(S.zoomMode==='one')  return pitch*ppmmDev();
+  if(S.zoomMode==='eye'){
+    // Wall subtends the same angle from monDist as it does from S.dist.
+    // scale = monDist / distance  (both in mm)
+    return pitch*ppmmDev()*(S.monDist/(S.dist*1000));
+  }
+  return Math.min(VW/nx,VH/ny)*S.zoomFree;
+}
+
+/* ================= render ================= */
+function renderView(cv, off, pitch, ideal, dims){
+  const dpr=window.devicePixelRatio||1;
+  // dims is supplied for offscreen canvases, which have no layout size.
+  const VW = dims ? dims.w : Math.max(1,Math.round(cv.clientWidth*dpr));
+  const VH = dims ? dims.h : Math.max(1,Math.round(cv.clientHeight*dpr));
+  if(cv.width!==VW||cv.height!==VH){ cv.width=VW; cv.height=VH; }
+  if(off.width!==VW) off.width=VW;
+  if(off.height!==VH) off.height=VH;
+  const o=off.getContext('2d');
+  o.setTransform(1,0,0,1,0,0); o.globalCompositeOperation='source-over'; o.globalAlpha=1;
+  o.filter='none';
+  o.fillStyle='#000'; o.fillRect(0,0,VW,VH);
+
+  const {nx,ny}=nativeRes(pitch);
+  const cell=cellPx(pitch,VW,VH);
+  const dw=nx*cell, dh=ny*cell;
+  const ox=(VW-dw)/2 + S.panX*dpr, oy=(VH-dh)/2 + S.panY*dpr;
+  let decim=1;                                  // >1 = native buffer decimated
+  let gridDrawn=false;                          // were physical gaps actually drawn?
+
+  if(S.src){
+    if(ideal){
+      // Reference wall: infinite resolution, same geometry, same eye filter.
+      const r=contentRect(nx,ny);
+      o.imageSmoothingEnabled=true; o.imageSmoothingQuality='high';
+      o.drawImage(S.src,0,0,S.srcW,S.srcH, ox+r.x*cell, oy+r.y*cell, r.w*cell, r.h*cell);
+    } else {
+      const x0=clamp(Math.floor(-ox/cell),0,nx), y0=clamp(Math.floor(-oy/cell),0,ny);
+      const x1=clamp(Math.ceil((VW-ox)/cell),0,nx), y1=clamp(Math.ceil((VH-oy)/cell),0,ny);
+      const cw=x1-x0, ch=y1-y0;
+      if(cw>0&&ch>0){
+        decim=Math.max(1,Math.ceil(Math.max(cw,ch)/CROP_CAP));
+        const crop=buildNativeCrop(pitch,x0,y0,cw,ch,decim);
+        // Emissive pixels are hard-edged, but a decimated buffer must filter.
+        o.imageSmoothingEnabled = decim>1;
+        o.imageSmoothingQuality='high';
+        o.drawImage(crop,0,0,crop.width,crop.height, ox+x0*cell, oy+y0*cell, cw*cell, ch*cell);
+        // physical inter-pixel gap
+        const gap=cell*(1-Math.sqrt(S.fill));
+        if(S.grid && cell>=3 && gap>=.6){
+          o.fillStyle='#000';
+          for(let i=x0;i<=x1;i++){ const x=ox+i*cell-gap/2; o.fillRect(x,oy+y0*cell,gap,ch*cell); }
+          for(let j=y0;j<=y1;j++){ const y=oy+j*cell-gap/2; o.fillRect(ox+x0*cell,y,cw*cell,gap); }
+          gridDrawn=true;
+        }
+      }
+    }
+  }
+
+  // Eye acuity low-pass, minus what the monitor+your own eyes already do.
+  // absBlur (used for PNG export) bakes the audience's acuity in full, because
+  // the recipient's screen size and viewing distance are unknown.
+  const k = cell/pitch;                                   // screen px per wall mm
+  const sTarget = (MM_PER_M*S.dist*k)/FWHM;               // required blur, screen px
+  const sMon    = (MM_PER_M*(S.monDist/1000)*ppmmDev())/FWHM;
+  const sAdd    = S.absBlur ? sTarget
+                            : Math.sqrt(Math.max(0, sTarget*sTarget - sMon*sMon));
+
+  // A real wall is calibrated to its rated nits whatever the fill factor: the
+  // LEDs are driven harder to compensate. Drawing black gaps without restoring
+  // the mean would tax low-fill (SMD) walls for a brightness loss they do not
+  // have, and would make the same wall change tone between zoom modes.
+  const gain = gridDrawn ? 1/Math.max(.05,S.fill) : 1;
+  const amb  = S.ambient;                                 // 0..1 black lift
+  const fx=[];
+  if(S.blur && sAdd>=.35) fx.push(`blur(${sAdd.toFixed(2)}px)`);
+  if(gain!==1 || amb>0)   fx.push(`brightness(${(gain*(1-amb)).toFixed(3)})`);
+
+  const c=cv.getContext('2d');
+  c.setTransform(1,0,0,1,0,0);
+  c.globalCompositeOperation='source-over'; c.globalAlpha=1;
+  c.clearRect(0,0,VW,VH);
+  c.filter = fx.length ? fx.join(' ') : 'none';
+  c.drawImage(off,0,0);
+  c.filter='none';
+  // Ambient reflection off the panel face: spatially flat, so it is added after
+  // the eye filter. out = amb + (1-amb)*in  -> blacks lift, white stays white.
+  if(amb>0){
+    // Only the panel face reflects light — not the void around the wall.
+    const rx=Math.max(0,ox), ry=Math.max(0,oy);
+    const rw=Math.min(VW,ox+nx*cell)-rx, rh=Math.min(VH,oy+ny*cell)-ry;
+    if(rw>0&&rh>0){
+      c.globalCompositeOperation='lighter';
+      c.globalAlpha=amb; c.fillStyle='#fff'; c.fillRect(rx,ry,rw,rh);
+      c.globalAlpha=1; c.globalCompositeOperation='source-over';
+    }
+  }
+  return {cell,nx,ny,ox,oy,sTarget,sMon,decim,gridDrawn};
+}
+
+let geoA=null, geoB=null;
+// Which view is under the pointer? In A/B the two canvases have DIFFERENT cell
+// sizes and pitches, so measuring or zooming over B while using A's geometry
+// silently reports the wrong wall-pixel count.
+function viewUnder(clientX){
+  if(S.mode==='ab' && geoB){
+    const rb=$('cvB').getBoundingClientRect();
+    if(clientX>=rb.left) return {cv:$('cvB'), geo:geoB, pitch:S.pitchB, tag:'B'};
+  }
+  return {cv:$('cvA'), geo:geoA, pitch:S.pitchA, tag:'A'};
+}
+function draw(){
+  const wipe = S.mode==='wipe', ab = S.mode==='ab';
+  $('wrapB').style.display = ab?'block':'none';
+  $('wipeBar').style.display = wipe?'block':'none';
+
+  geoA = renderView($('cvA'), offA, S.pitchA, false);
+  geoB = null;
+
+  if(ab){
+    geoB = renderView($('cvB'), offB, S.pitchB, false);
+    const a=nativeRes(S.pitchA), b=nativeRes(S.pitchB);
+    $('labA').textContent = `A · ${S.pitchA} mm · ${a.nx}×${a.ny}`;
+    $('labB').textContent = `B · ${S.pitchB} mm · ${b.nx}×${b.ny}`;
+  } else if(wipe){
+    // Left of the bar = the ideal source; right = the real wall (already in cvA).
+    const cv=$('cvA');
+    renderView(idealCv, idealOff, S.pitchA, true, {w:cv.width,h:cv.height});
+    const c=cv.getContext('2d');
+    const xw=Math.round(cv.width*S.wipe);
+    c.save(); c.beginPath(); c.rect(0,0,xw,cv.height); c.clip();
+    c.drawImage(idealCv,0,0); c.restore();
+    $('wipeBar').style.left = (S.wipe*100)+'%';
+    const a=nativeRes(S.pitchA);
+    $('labA').textContent = `SOURCE ${S.srcW}×${S.srcH}   |   WALL ${S.pitchA} mm · ${a.nx}×${a.ny}`;
+  } else {
+    const a=nativeRes(S.pitchA);
+    $('labA').textContent = `${S.pitchA} mm · ${a.nx}×${a.ny} · ${S.dist.toFixed(1)} m`;
+  }
+  updateReadout();
+}
+
+/* ================= readouts ================= */
+function verdict(v,good,mid){ return v>=good?'ok':v>=mid?'mid':'no'; }
+
+function updateReadout(){
+  const {nx,ny}=nativeRes(S.pitchA);
+  const el0=$('roNative');
+  el0.textContent = `${nx} × ${ny}`;
+  // A wall smaller than a single pitch cell is clamped to 1 px for rendering,
+  // which would otherwise make the drawn wall larger than the declared one.
+  const subPixel = (S.wallW*1000/S.pitchA)<1 || (S.wallH*1000/S.pitchA)<1;
+  el0.className = subPixel ? 'no' : '';
+  el0.title = subPixel ? 'Wall is smaller than one pixel pitch — geometry is clamped' : '';
+  const tot=nx*ny;
+  $('roPx').textContent = tot>1e6 ? (tot/1e6).toFixed(2)+' MP'
+                        : tot>=1e3 ? (tot/1e3).toFixed(0)+' kP'
+                        : tot+' px';
+
+  if(S.src){
+    const r=contentRect(nx,ny);
+    const pct = r.w/S.srcW*100;
+    const el=$('roScale');
+    el.textContent = pct.toFixed(0)+'%';
+    el.className = pct>=98 ? 'acc' : pct>=60 ? 'mid' : 'no';
+    el.title = pct<100 ? `Source ${S.srcW}px wide → ${Math.round(r.w)} wall px` : 'Wall out-resolves the content';
+  } else $('roScale').textContent='—';
+
+  const r_mm = MM_PER_M*S.dist;
+  $('roEye').textContent = r_mm.toFixed(2)+' mm';
+
+  const ratio = S.pitchA/r_mm;                     // >1 = grid resolvable
+  const g=$('roGrid');
+  g.textContent = ratio>=1 ? 'VISIBLE' : ratio>=.6 ? 'MARGINAL' : 'INVISIBLE';
+  g.className = ratio>=1 ? 'no' : ratio>=.6 ? 'mid' : 'ok';
+
+  // Two distinct distances, previously conflated into one misleading number:
+  // the nominal 1-arcmin acuity limit, and the distance at which this tool
+  // actually stops calling the structure detectable (a periodic grating stays
+  // visible somewhat past the acuity limit, which is why the bands differ).
+  // Derived from the acuity constant, never hard-coded, so the two can't drift.
+  const retina = S.pitchA/MM_PER_M;                   // == 3.44 x pitch
+  const safe   = S.pitchA/(0.6*MM_PER_M);             // ratio drops below 0.6
+  $('roRetina').textContent = retina.toFixed(1)+' m';
+  $('roSafe').textContent   = safe.toFixed(1)+' m';
+
+  const ang = 2*Math.atan((S.wallW/2)/S.dist)*180/Math.PI;
+  $('roSub').textContent = ang.toFixed(0)+'°';
+
+  $('distHint').innerHTML =
+    `At <b>${S.dist.toFixed(1)} m</b> the eye resolves <b>${r_mm.toFixed(2)} mm</b>. ` +
+    (ratio>=1 ? `Your ${S.pitchA} mm pitch is <b>coarser</b> than that — pixels are individually visible.`
+              : `Your ${S.pitchA} mm pitch is <b>finer</b> than that — the grid fuses.`) +
+    `<br>Acuity limit <b>${retina.toFixed(1)} m</b> (3.44 × pitch); conservatively structure-free from <b>${safe.toFixed(1)} m</b>, since a repeating grid stays detectable past the limit for a single feature. Common "1 m per mm" rule: ${S.pitchA.toFixed(1)} m (aggressive minimum).`;
+
+  // On-screen scale vs. real size, and the distance your own eye is effectively at.
+  const zl = geoA ? (geoA.cell/S.pitchA/ppmmDev()) : 1;
+  const equiv = (S.monDist/1000)/Math.max(1e-6,zl);   // metres
+  let txt = (HAS_FILTER?'':'⚠ NO CANVAS FILTER — acuity blur unavailable in this browser · ')
+    + (S.calibrated?'':'⚠ UNCALIBRATED · ')
+    + `${S.zoomMode==='eye'?'EYE-MATCH':S.zoomMode.toUpperCase()} · ${(zl*100).toFixed(1)}% of real size · your eye ≈ ${equiv.toFixed(1)} m from this wall`;
+  if(geoA){
+    const cov = Math.min(1, $('cvA').width/(geoA.nx*geoA.cell));
+    if(cov<0.995) txt += ` · showing ${(cov*100).toFixed(0)}% of wall width (drag/scroll)`;
+    // Your own eye is the tighter limit: you are seeing LESS than the audience.
+    if(equiv > S.dist*1.15)
+      txt += ` · ⚠ shown smaller than the audience's view — zoom in to judge detail`;
+    // The monitor physically cannot draw a gap thinner than a screen pixel, so
+    // in exactly the band where the pitch decision is live the view can look
+    // clean while the readout says the audience would see structure. Say so on
+    // the canvas, not only up here.
+    const undrawable = geoA.cell<3 && S.pitchA >= MM_PER_M*S.dist*0.6;
+    if(undrawable) txt += ` · ⚠ gap too fine to draw — use 1:1 to inspect structure`;
+    const banner=$('structBanner');
+    banner.style.display = undrawable ? 'block' : 'none';
+    banner.textContent = 'Structure not renderable at this zoom — the readout says the audience '
+      + 'would see it. Switch to 1:1 to inspect.';
+    // Wall too large to buffer at native res; filtered preview, readouts exact.
+    if(geoA.decim>1)
+      txt += ` · preview filtered ${geoA.decim}:1 (wall too large to buffer natively — readouts still exact)`;
+  }
+  $('zoomLbl').textContent = txt;
+}
+
+/* ================= measure tool ================= */
+let measuring=false, mStart=null;
+function measureReport(wpx,hpx,pitch,tag){
+  pitch = pitch || S.pitchA;
+  const wallPxH = hpx;                                  // wall pixels of height
+  const mm = hpx*pitch;
+  const angMin = 2*Math.atan((mm/2)/(S.dist*1000))/ARCMIN_RAD;
+  const vPx = verdict(wallPxH,10,6);
+  const vAn = verdict(angMin,20,12);
+  const worst = (vPx==='no'||vAn==='no')?'no':(vPx==='mid'||vAn==='mid')?'mid':'ok';
+  const word = worst==='ok'?'READS COMFORTABLY':worst==='mid'?'MARGINAL — risky':'WILL NOT READ';
+  $('measOut').innerHTML =
+    (tag==='B' ? `<span class="acc">view B · ${pitch} mm</span><br>` : '')+
+    `height <b>${hpx.toFixed(1)}</b> wall px &nbsp; <span class="${vPx}">${vPx==='ok'?'ok':vPx==='mid'?'thin':'too few'}</span><br>`+
+    `physical <b>${mm.toFixed(0)} mm</b> (${(mm/10).toFixed(1)} cm)<br>`+
+    `angular <b>${angMin.toFixed(1)}′</b> at ${S.dist.toFixed(1)} m &nbsp; <span class="${vAn}">${vAn==='ok'?'ok':vAn==='mid'?'small':'below acuity'}</span><br>`+
+    `<span class="${worst}" style="font-size:12.5px">${word}</span>`;
+}
+
+/* ================= UI wiring ================= */
+function toast(t){ const e=$('toast'); e.textContent=t; e.classList.add('show'); setTimeout(()=>e.classList.remove('show'),1600); }
+
+document.querySelectorAll('.sec>h3').forEach(h=>h.onclick=()=>h.parentElement.classList.toggle('closed'));
+
+// pitch presets
+const PITCHES=[0.9,1.2,1.5,1.9,2.6,2.9,3.9,4.8,6.0,8.0,10.0];
+PITCHES.forEach(p=>{
+  const c=document.createElement('div'); c.className='chip'; c.textContent=p.toFixed(1);
+  c.onclick=()=>{ S.pitchA=p; $('pitchA').value=p; draw(); };
+  $('pitchChips').appendChild(c);
+});
+
+const num=(id,key,after)=>{ $(id).oninput=e=>{ const v=parseFloat(e.target.value); if(isFinite(v)&&v>0){ S[key]=v; (after||draw)(); } }; };
+num('wallW','wallW'); num('wallH','wallH'); num('pitchA','pitchA'); num('pitchB','pitchB');
+
+$('fill').oninput=e=>{ S.fill=e.target.value/100; $('fillV').textContent=e.target.value+'%'; draw(); };
+$('amb').oninput =e=>{ S.ambient=e.target.value/100; $('ambV').textContent=e.target.value+'%'; draw(); };
+
+function setDist(v){ S.dist=clamp(v,.3,200); $('dist').value=Math.min(60,S.dist); $('distN').value=S.dist.toFixed(1); $('distV').textContent=S.dist.toFixed(1)+' m'; draw(); }
+$('dist').oninput=e=>setDist(parseFloat(e.target.value));
+$('distN').oninput=e=>{ const v=parseFloat(e.target.value); if(isFinite(v)) setDist(v); };
+document.querySelectorAll('[data-jump]').forEach(b=>b.onclick=()=>{
+  const j=b.dataset.jump;
+  setDist(j==='near'? Math.max(1,S.wallW*0.4) : j==='mid'? S.wallW*1.2 : S.wallW*2.5);
+});
+
+$('fitMode').onchange=e=>{S.fitMode=e.target.value;draw()};
+$('scaler').onchange=e=>{S.scaler=e.target.value;draw()};
+$('zoomMode').onchange=e=>{S.zoomMode=e.target.value;S.panX=S.panY=0;draw()};
+$('zoomF').oninput=e=>{ S.zoomFree=Math.pow(1.06,+e.target.value); $('zoomFV').textContent=S.zoomFree.toFixed(2)+'×'; if(S.zoomMode!=='free'){S.zoomMode='free';$('zoomMode').value='free';} draw(); };
+$('tGrid').onclick=e=>{S.grid=!S.grid;e.target.classList.toggle('on',S.grid);draw()};
+$('tBlur').onclick=e=>{S.blur=!S.blur;e.target.classList.toggle('on',S.blur);draw()};
+
+document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('[data-mode]').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on'); S.mode=b.dataset.mode; draw();
+});
+
+$('measBtn').onclick=e=>{ measuring=!measuring; e.target.classList.toggle('on',measuring); $('stage').style.cursor=measuring?'crosshair':''; };
+
+/* calibration.  `persist` is only true for real user interaction, so that a
+   never-calibrated machine stays visibly uncalibrated instead of silently
+   adopting the 96-dpi guess as though it had been measured. */
+function applyCal(persist){
+  const px=+$('calR').value;
+  S.ppmmCss=px/85.6;
+  $('calCard').style.width=px+'px';
+  $('calCard').style.height=(px*53.98/85.6)+'px';
+  $('calV').textContent=S.ppmmCss.toFixed(2);
+  const dpi=(S.ppmmCss*25.4).toFixed(0);
+  $('calHint').innerHTML=`≈ <b>${dpi} CSS dpi</b>. Eye at ${S.monDist} mm resolves ${(MM_PER_M*S.monDist/1000).toFixed(2)} mm on this monitor.`
+    + (S.calibrated?'':'<br><b style="color:var(--warn)">Not yet calibrated</b> — 1:1 and eye-match are guesses until you match the card.');
+  if(persist){
+    S.calibrated=true;
+    // Unguarded this throws under file:// with storage disabled, which would
+    // kill the boot render entirely — the tool is meant to run off a double-click.
+    try{ localStorage.setItem('squint.cal',JSON.stringify({px,d:S.monDist,cal:true})); }
+    catch(e){ /* no persistence available; calibration still applies this session */ }
+  }
+  draw();
+}
+$('calR').oninput=()=>applyCal(true);
+$('monDist').oninput=e=>{ const v=parseFloat(e.target.value); if(isFinite(v)&&v>100){S.monDist=v;applyCal(true);} };
+try{ const c=JSON.parse(localStorage.getItem('squint.cal')||'null');
+     if(c){ $('calR').value=c.px; $('monDist').value=c.d; S.monDist=c.d; S.calibrated=!!c.cal; } }catch(e){}
+
+/* ---------- file loading ---------- */
+const vid=$('vid');
+let raf=null;
+function loop(){ draw(); raf=requestAnimationFrame(loop); }
+function stopLoop(){ if(raf){cancelAnimationFrame(raf);raf=null;} }
+
+let loadToken=0, currentUrl=null;
+// Loading a second file before the first decodes must not let the stale
+// callback win, and each object URL has to be released or every load leaks.
+function loadFile(f){
+  if(!f) return;
+  const myToken=++loadToken;
+  stopLoop();
+  try{ vid.pause(); }catch(e){}
+  S.name=f.name;
+  const url=URL.createObjectURL(f);
+  const release=()=>{ if(currentUrl && currentUrl!==url) URL.revokeObjectURL(currentUrl); currentUrl=url; };
+  // File.type is empty for some dragged/local files; fall back to extension.
+  const ext=(f.name.split('.').pop()||'').toLowerCase();
+  const isVid = f.type ? f.type.startsWith('video')
+                       : ['mp4','mov','webm','m4v','mkv','avi'].includes(ext);
+  if(isVid){
+    vid.src=url;
+    vid.load();
+    vid.onloadedmetadata=()=>{
+      if(myToken!==loadToken) return;                       // superseded
+      if(!(vid.videoWidth>0 && vid.videoHeight>0)){         // no usable video track
+        toast('That file has no usable video track'); return;
+      }
+      release();
+      S.src=vid; S.srcW=vid.videoWidth; S.srcH=vid.videoHeight; S.isVideo=true;
+      $('vidCtl').style.display='flex'; $('seekRow').style.display='flex';
+      $('seek').max=Math.max(1,Math.floor((vid.duration||1)*100));
+      $('drop').classList.add('hide');
+      vid.currentTime=Math.min(.1,(vid.duration||1)/2); draw();
+    };
+    vid.onerror=()=>{ if(myToken===loadToken) toast('Could not decode that video'); };
+  } else {
+    const img=new Image();
+    img.onload=()=>{
+      if(myToken!==loadToken) return;
+      release();
+      S.src=img; S.srcW=img.naturalWidth; S.srcH=img.naturalHeight; S.isVideo=false;
+      $('vidCtl').style.display='none'; $('seekRow').style.display='none';
+      $('drop').classList.add('hide'); draw();
+    };
+    img.onerror=()=>{ if(myToken===loadToken) toast('Could not decode that image'); };
+    img.src=url;
+  }
+}
+$('loadBtn').onclick=()=>$('file').click();
+$('drop2').onclick=()=>$('file').click();
+$('file').onchange=e=>loadFile(e.target.files[0]);
+
+$('playBtn').onclick=e=>{
+  if(!S.isVideo) return;
+  if(vid.paused){ vid.play(); e.target.textContent='❚❚ Pause'; stopLoop(); loop(); }
+  else { vid.pause(); e.target.textContent='▶ Play'; stopLoop(); draw(); }
+};
+// The RAF loop must stop on every way playback can end, not just on the button.
+['pause','ended','error','emptied'].forEach(ev=>vid.addEventListener(ev,()=>{
+  stopLoop(); $('playBtn').textContent='▶ Play'; if(S.src) draw();
+}));
+$('loopBtn').onclick=e=>{ vid.loop=!vid.loop; e.target.classList.toggle('on',vid.loop); };
+$('loopBtn').classList.add('on');
+$('seek').oninput=e=>{ if(!S.isVideo)return; vid.currentTime=e.target.value/100; $('seekV').textContent=(e.target.value/100).toFixed(1)+'s'; };
+vid.ontimeupdate=()=>{ if(!vid.paused){ $('seek').value=vid.currentTime*100; $('seekV').textContent=vid.currentTime.toFixed(1)+'s'; } };
+vid.onseeked=()=>{ if(vid.paused) draw(); };
+
+const stage=$('stage');
+['dragenter','dragover'].forEach(t=>stage.addEventListener(t,e=>{e.preventDefault();$('drop').classList.add('over');$('drop').classList.remove('hide');}));
+stage.addEventListener('dragleave',e=>{ if(e.target===$('drop')){$('drop').classList.remove('over'); if(S.src)$('drop').classList.add('hide');} });
+stage.addEventListener('drop',e=>{ e.preventDefault(); $('drop').classList.remove('over'); loadFile(e.dataTransfer.files[0]); });
+
+/* ---------- pan / zoom / wipe / measure ---------- */
+let drag=null;
+stage.addEventListener('mousedown',e=>{
+  const r=stage.getBoundingClientRect();
+  if(S.mode==='wipe' && Math.abs(e.clientX-r.left-r.width*S.wipe)<14){ drag={t:'wipe'}; return; }
+  // Remember which view the drag STARTED in — in A/B the two views have
+  // different cell sizes, so measuring B with A's geometry reports nonsense.
+  if(measuring){ drag={t:'meas',x:e.clientX-r.left,y:e.clientY-r.top,view:viewUnder(e.clientX)}; mStart=drag;
+    const b=$('measureBox'); b.style.display='block'; b.style.left=drag.x+'px'; b.style.top=drag.y+'px'; b.style.width='0px'; b.style.height='0px'; return; }
+  drag={t:'pan',x:e.clientX,y:e.clientY,px:S.panX,py:S.panY};
+});
+window.addEventListener('mousemove',e=>{
+  if(!drag) return;
+  const r=stage.getBoundingClientRect();
+  if(drag.t==='wipe'){ S.wipe=clamp((e.clientX-r.left)/r.width,0,1); draw(); }
+  else if(drag.t==='pan'){ S.panX=drag.px+(e.clientX-drag.x); S.panY=drag.py+(e.clientY-drag.y); draw(); }
+  else if(drag.t==='meas'){
+    const x=e.clientX-r.left, y=e.clientY-r.top;
+    const b=$('measureBox');
+    b.style.left=Math.min(x,drag.x)+'px'; b.style.top=Math.min(y,drag.y)+'px';
+    b.style.width=Math.abs(x-drag.x)+'px'; b.style.height=Math.abs(y-drag.y)+'px';
+  }
+});
+window.addEventListener('mouseup',e=>{
+  if(drag&&drag.t==='meas'){
+    const r=stage.getBoundingClientRect();
+    const dpr=window.devicePixelRatio||1;
+    const hCss=Math.abs((e.clientY-r.top)-drag.y), wCss=Math.abs((e.clientX-r.left)-drag.x);
+    const V=drag.view;
+    if(V&&V.geo&&hCss>2){ measureReport(wCss*dpr/V.geo.cell, hCss*dpr/V.geo.cell, V.pitch, V.tag); }
+  }
+  drag=null;
+});
+stage.addEventListener('wheel',e=>{
+  e.preventDefault();
+  if(!geoA) return;
+  // Anchor on the view actually under the pointer, with ITS pitch and geometry.
+  const V=viewUnder(e.clientX);
+  const cv=V.cv, G=V.geo, dpr=window.devicePixelRatio||1;
+  if(!G) return;
+  const r=cv.getBoundingClientRect();
+  const cx=(e.clientX-r.left)*dpr, cy=(e.clientY-r.top)*dpr;   // cursor, device px
+  const cell0=G.cell, ox0=G.ox, oy0=G.oy;
+  const u=(cx-ox0)/cell0, v=(cy-oy0)/cell0;                    // wall pixel under cursor
+
+  if(S.zoomMode!=='free'){
+    S.zoomMode='free'; $('zoomMode').value='free';
+    S.zoomFree = cell0/Math.min(cv.width/G.nx, cv.height/G.ny);
+  }
+  // Keep the wheel within the slider's representable range so the two agree.
+  const ZMIN=Math.pow(1.06,-30), ZMAX=Math.pow(1.06,60);
+  S.zoomFree=clamp(S.zoomFree*(e.deltaY<0?1.15:1/1.15),ZMIN,ZMAX);
+  $('zoomF').value=Math.log(S.zoomFree)/Math.log(1.06);
+  $('zoomFV').textContent=S.zoomFree.toFixed(2)+'×';
+
+  // Keep that wall pixel pinned under the cursor.
+  const cell1=cellPx(V.pitch,cv.width,cv.height);
+  S.panX=(cx-u*cell1-(cv.width -G.nx*cell1)/2)/dpr;
+  S.panY=(cy-v*cell1-(cv.height-G.ny*cell1)/2)/dpr;
+  draw();
+},{passive:false});
+stage.addEventListener('dblclick',()=>{ S.panX=S.panY=0; draw(); });
+
+window.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT') return;
+  if(e.key===' '&&S.isVideo){ e.preventDefault(); $('playBtn').click(); }
+  if(e.key==='ArrowRight') setDist(S.dist+ (e.shiftKey?5:.5));
+  if(e.key==='ArrowLeft')  setDist(S.dist- (e.shiftKey?5:.5));
+  if(e.key==='0'){ S.panX=S.panY=0; draw(); }
+});
+window.addEventListener('resize',()=>draw());
+
+/* ---------- PNG export ---------- */
+$('pngBtn').onclick=()=>{
+  if(!S.src) return toast('Load some content first');
+  const btn=$('pngBtn'); btn.textContent='Encoding…'; btn.disabled=true;
+  setTimeout(()=>exportPng(btn), 40);          // let the label paint first
+};
+function exportPng(btn){
+  // The exported file leaves the tool: the recipient's display size and viewing
+  // distance are unknown, so bake the audience's acuity ABSOLUTELY rather than
+  // relying on their eye to supply the difference, and stamp the geometry the
+  // image is only true at. Without this the PNG flatters the wall, because a
+  // deck slide is almost always viewed smaller than eye-match scale.
+  const wasAbs=S.absBlur; S.absBlur=true; draw();
+
+  const a=$('cvA'), ab=S.mode==='ab';
+  const b=$('cvB');
+  const W=ab?a.width+b.width+8:a.width, H=a.height+124;
+  const out=mk(); out.width=W; out.height=H;
+  const c=out.getContext('2d');
+  c.fillStyle='#0e1013'; c.fillRect(0,0,W,H);
+  c.drawImage(a,0,0);
+  if(ab) c.drawImage(b,a.width+8,0);
+
+  const {nx,ny}=nativeRes(S.pitchA);
+  c.font='600 22px Segoe UI, sans-serif'; c.fillStyle='#ff9f1c';
+  c.fillText('SQUINT', 20, a.height+34);
+  c.font='15px Consolas, monospace'; c.fillStyle='#e8ebef';
+  const l1 = `${S.wallW} × ${S.wallH} m wall   ·   viewer at ${S.dist.toFixed(1)} m   ·   ${S.name}`;
+  const l2 = ab
+    ? `A: ${S.pitchA} mm → ${nx}×${ny}      B: ${S.pitchB} mm → ${nativeRes(S.pitchB).nx}×${nativeRes(S.pitchB).ny}      eye resolves ${(MM_PER_M*S.dist).toFixed(2)} mm`
+    : `${S.pitchA} mm pitch → ${nx} × ${ny} native   ·   eye resolves ${(MM_PER_M*S.dist).toFixed(2)} mm   ·   acuity limit ${(S.pitchA/MM_PER_M).toFixed(1)} m`;
+  c.fillText(l1, 120, a.height+30);
+  c.fillStyle='#8b939e'; c.fillText(l2, 120, a.height+58);
+
+  // The viewing contract. Angular equivalence holds only when displayed width
+  // and viewing distance keep the same ratio as wall width to viewer distance.
+  const ratio = S.dist/S.wallW;
+  c.fillStyle='#ff9f1c';
+  c.fillText(`Angularly true only when viewed from ${ratio.toFixed(2)} × its displayed width`+
+             `  (e.g. 25 cm wide → view from ${(25*ratio).toFixed(0)} cm). Otherwise indicative only.`,
+             120, a.height+86);
+  c.fillStyle='#5f6873';
+  c.fillText(`zoom: ${S.zoomMode}   ·   fill ${(S.fill*100)|0}%   ·   ambient ${(S.ambient*100)|0}%`+
+             `   ·   audience acuity baked in`, 120, a.height+110);
+
+  S.absBlur=wasAbs; draw();
+
+  const restore=()=>{ btn.textContent='Save comparison PNG'; btn.disabled=false; };
+  if(!out.toBlob){ restore(); return toast('This browser cannot export PNG'); }
+  try{
+    out.toBlob(bl=>{
+      restore();
+      if(!bl) return toast('Export failed — canvas too large');
+      const u=URL.createObjectURL(bl), link=document.createElement('a');
+      link.href=u; link.download=`SQUINT_${S.pitchA}mm_${S.dist.toFixed(0)}m.png`;
+      link.click(); setTimeout(()=>URL.revokeObjectURL(u),4000);
+      toast('PNG saved');
+    },'image/png');
+  }catch(err){ restore(); toast('Export failed'); }
+}
+
+/* ---------- debug / scripting handle ---------- */
+window.SQUINT = { S, nativeRes, contentRect, cellPx, draw, ppmmDev, viewUnder,
+                  geo:()=>geoA, geoB:()=>geoB, HAS_FILTER, ARCMIN_RAD, MM_PER_M };
+
+/* ---------- boot ---------- */
+applyCal(false);
+setDist(5);
+draw();
+</script>
+</body>
+</html>
