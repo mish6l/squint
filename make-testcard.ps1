@@ -31,6 +31,12 @@ foreach ($s in $sizes) {
     $ff.Dispose()
 }
 
+# Geometric test patches must NOT be antialiased. With AntiAlias on, GDI+ blends
+# a 1 px white line into a flat 132 grey at source, so the card would appear to
+# prove a resolution loss that had already happened before SQUINT saw it.
+$g.SmoothingMode = 'None'
+$g.PixelOffsetMode = 'Half'
+
 # --- hairline wedge: 1..6 px rules ---
 $x = 2500; $y2 = 300
 foreach ($w in 1,2,3,4,6,8) {
@@ -66,6 +72,36 @@ for ($i = 0; $i -lt $cols.Count; $i++) {
     $g.FillRectangle($b, ($i * $bw), ($H - 220), $bw, 220)
     $b.Dispose()
 }
+
+# --- gamma fusion patch ---
+# A 50/50 duty black/white stripe field. When it is blurred away, correct
+# LINEAR-LIGHT fusion lands on linear 0.5, which is sRGB ~188. Fusing in gamma
+# space lands on ~128 instead. So the fused grey of this patch is a decisive,
+# measurable test of whether the pipeline is linear. The reference block beside
+# it is filled with the correct answer (188) to compare against by eye.
+$gx = 300; $gy = 1500
+for ($i = 0; $i -lt 500; $i += 2) { $g.FillRectangle($white, ($gx + $i), $gy, 1, 260) }
+$ref188 = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(188,188,188))
+$g.FillRectangle($ref188, ($gx + 520), $gy, 260, 260)
+$ref128 = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(128,128,128))
+$g.FillRectangle($ref128, ($gx + 800), $gy, 260, 260)
+$lab = New-Object System.Drawing.Font("Consolas", 24, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
+$g.DrawString("50/50 stripes", $lab, $grey, $gx, ($gy + 270))
+$g.DrawString("188 = linear (right)", $lab, $grey, ($gx + 520), ($gy + 270))
+$g.DrawString("128 = gamma (wrong)", $lab, $grey, ($gx + 800), ($gy + 270))
+
+# --- dark ramp for banding / bit-depth checks ---
+# A smooth 0..40/255 gradient. On a real panel this posterises; a tool with no
+# bit-depth model renders it perfectly smooth.
+$rx = 1500; $ry = 1500
+for ($i = 0; $i -lt 900; $i++) {
+    $v = [int]([math]::Round($i * 40.0 / 900.0))
+    $b = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($v, $v, $v))
+    $g.FillRectangle($b, ($rx + $i), $ry, 1, 260)
+    $b.Dispose()
+}
+$g.SmoothingMode = 'AntiAlias'      # text below wants antialiasing again
+$g.DrawString("dark ramp 0-40/255 (banding test)", $lab, $grey, $rx, ($gy + 270))
 
 # --- corner registration marks ---
 $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(255,159,28), 4)

@@ -166,8 +166,42 @@ video{position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-e
         <div class="row" id="rowPitchB"><label>Pitch B</label><input type="number" id="pitchB" value="6" step="0.1" min="0.4"><span class="val">mm</span></div>
         <div class="row"><label>Fill factor</label><input type="range" id="fill" min="20" max="100" value="50"><span class="val" id="fillV">50%</span></div>
         <p class="hint">Fill factor = lit LED area vs. pitch cell. SMD ≈ 40–55%, GOB/COB ≈ 70–90%. Drives the inter-pixel gap only — mean brightness is held constant, as on a calibrated wall.</p>
-        <div class="row"><label>Ambient wash</label><input type="range" id="amb" min="0" max="45" value="0"><span class="val" id="ambV">0%</span></div>
-        <p class="hint">Light falling on the panel face lifts blacks and crushes contrast. 0% = blackout room. 10–20% = lit hall. 30%+ = daylight or a heavily lit booth. This is what kills dark, moody grades on the floor.</p>
+        <div class="row"><label>Bit depth</label>
+          <select id="bits">
+            <option value="8">8-bit processing</option>
+            <option value="10">10-bit processing</option>
+            <option value="12">12-bit processing</option>
+            <option value="16">no quantisation</option>
+          </select>
+        </div>
+        <div class="row"><label>Wall driven at</label><input type="range" id="wbright" min="5" max="100" value="100"><span class="val" id="wbrightV">100%</span></div>
+        <p class="hint">Quantisation happens in the signal domain, as a real processor does — which is why it shows up as posterisation near black. Driving the wall dim costs you greyscale: at 20% brightness an 8-bit chain has barely 6 bits left, and that is what bands your dark grades.</p>
+      </div>
+    </div>
+
+    <div class="sec" data-k="light">
+      <h3>Light &amp; angle</h3>
+      <div class="secBody">
+        <div class="row"><label>Ambient from</label>
+          <select id="ambMode">
+            <option value="photo">lux &amp; nits (derived)</option>
+            <option value="manual">manual %</option>
+          </select>
+        </div>
+        <div class="row" id="rowNits"><label>Panel peak</label><input type="number" id="nits" value="1000" step="100" min="50"><span class="val">nits</span></div>
+        <div class="row" id="rowLux"><label>Ambient</label><input type="number" id="lux" value="400" step="50" min="0"><span class="val">lux</span></div>
+        <div class="chips" id="luxChips"></div>
+        <div class="row" id="rowRefl"><label>Face reflect.</label>
+          <select id="reflect">
+            <option value="0.03">matte mask 3%</option>
+            <option value="0.04" selected>typical 4%</option>
+            <option value="0.06">shiny / GOB 6%</option>
+          </select>
+        </div>
+        <div class="row" id="rowManual" style="display:none"><label>Ambient wash</label><input type="range" id="amb" min="0" max="60" value="0"><span class="val" id="ambV">0%</span></div>
+        <p class="hint" id="photoHint"></p>
+        <div class="row"><label>Viewing angle</label><input type="range" id="offax" min="0" max="75" value="0"><span class="val" id="offaxV">0°</span></div>
+        <p class="hint">Luminance rolloff off-axis, using a typical SMD curve — real panels vary, so treat it as indicative. Booth audiences commonly sit at 45–60°.</p>
       </div>
     </div>
 
@@ -218,6 +252,7 @@ video{position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-e
         <div class="seg">
           <button class="btn on" id="tGrid">Pixel gap</button>
           <button class="btn on" id="tBlur">Eye acuity</button>
+          <button class="btn on" id="tFig">Scale figure</button>
         </div>
         <div class="row"><label>Zoom</label>
           <select id="zoomMode">
@@ -302,6 +337,7 @@ video{position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-e
     <div class="ro"><b id="roRetina">—</b><span>Acuity limit</span></div>
     <div class="ro"><b id="roSafe">—</b><span>Structure-free at</span></div>
     <div class="ro"><b id="roSub">—</b><span>Wall subtends</span></div>
+    <div class="ro"><b id="roContrast">—</b><span>On-site contrast</span></div>
   </div>
 </div>
 
@@ -334,7 +370,9 @@ const clamp = (v,a,b) => v<a?a:v>b?b:v;
 const S = {
   wallW:6, wallH:3, pitchA:2.9, pitchB:6, fill:.5,
   dist:5, fitMode:'fit', scaler:'good', ambient:0, absBlur:false, calibrated:false,
-  grid:true, blur:true, zoomMode:'eye', zoomFree:1,
+  grid:true, blur:true, zoomMode:'eye', zoomFree:1, figure:true,
+  bits:8, wallBright:1, offAxis:0,
+  ambMode:'photo', nits:1000, lux:400, reflect:0.04,
   panX:0, panY:0, mode:'sim', wipe:.5,
   ppmmCss:324/85.6, monDist:600,
   src:null, srcW:0, srcH:0, isVideo:false, name:'—'
@@ -365,65 +403,276 @@ function contentRect(nx,ny){
   return { x:(nx-w)/2, y:(ny-h)/2, w, h };
 }
 
-/* High-quality progressive downscale (what a decent processor does). */
-function scaleInto(out, src, sw, sh, dw, dh, smooth){
-  dw=Math.max(1,Math.round(dw)); dh=Math.max(1,Math.round(dh));
-  let cur=src, cw=sw, ch=sh, i=0;
-  if(smooth){
-    while(cw>dw*2 || ch>dh*2){
-      const nw=Math.max(dw,Math.round(cw/2)), nh=Math.max(dh,Math.round(ch/2));
-      if(nw===cw && nh===ch) break;
-      const t=tmp[i++%2]; t.width=nw; t.height=nh;
-      const c=t.getContext('2d');
-      c.imageSmoothingEnabled=true; c.imageSmoothingQuality='high';
-      c.drawImage(cur,0,0,cw,ch,0,0,nw,nh);
-      cur=t; cw=nw; ch=nh;
-    }
-  }
-  out.width=dw; out.height=dh;
-  const o=out.getContext('2d');
-  o.imageSmoothingEnabled=smooth; o.imageSmoothingQuality='high';
-  o.drawImage(cur,0,0,cw,ch,0,0,dw,dh);
-  return out;
-}
+/* =====================================================================
+   WebGL2 render core.
 
-/* Build the native-grid crop [x0,y0,cw,ch] of the wall. This is the honest
-   ceiling of what the panel can physically display. */
-// `f` decimates the buffer when the visible native region is too large to
-// allocate (big walls: 30x8 m at 2.6 mm is 11538x3077 native). f>1 only ever
-// happens when cell<1, i.e. when one screen pixel already covers several wall
-// pixels and the grid is physically invisible, so filtering down is the
-// correct approximation rather than a compromise.
-function buildNativeCrop(pitch, x0,y0,cw,ch,f){
-  const {nx,ny}=nativeRes(pitch);
-  const r=contentRect(nx,ny);
-  const bw=Math.max(1,Math.round(cw/f)), bh=Math.max(1,Math.round(ch/f));
-  // Setting width/height reallocates the backing store; during video playback
-  // that happens every frame, so only touch it when the size really changed.
-  if(cropCv.width!==bw)  cropCv.width=bw;
-  if(cropCv.height!==bh) cropCv.height=bh;
-  const c=cropCv.getContext('2d');
-  c.fillStyle='#000'; c.fillRect(0,0,bw,bh);
-  if(!S.src) return cropCv;
-  const smooth = S.scaler==='good' || f>1;
-  let img=S.src, iw=S.srcW, ih=S.srcH;
-  // Pre-resample the source to its wall-native size when downscaling.
-  if(f===1 && r.w < S.srcW && r.w<=8192 && r.h<=8192){
-    scaleInto(contentCv,S.src,S.srcW,S.srcH,r.w,r.h,smooth);
-    img=contentCv; iw=contentCv.width; ih=contentCv.height;
+   Every pixel of the simulation is computed here and every intermediate
+   buffer is RGBA16F holding LINEAR light. That is the whole point: real
+   light mixes linearly, and canvas 2D cannot. `ctx.filter` blurs in gamma
+   space by specification and `drawImage` resampling is a browser hint, so
+   the old path produced a confidently wrong answer — a 50/50 black/white
+   field fused to sRGB 131 when the physically correct answer is 188.
+
+   Pass order:
+     0  upload frame as SRGB8_ALPHA8   -> sampling returns linear for free
+     1  deterministic box downsample   -> exact area average to the LED grid
+     2  bit-depth / PWM quantisation   -> in the SIGNAL domain, as a processor does
+     3  composite to screen            -> analytic fill coverage, gain, ambient
+     4  separable Gaussian acuity blur -> in linear light
+     5  encode to sRGB and present
+   ===================================================================== */
+const GLE = (()=>{
+  const cv = document.createElement('canvas');
+  let gl=null, fail='';
+  try{ gl = cv.getContext('webgl2',{antialias:false, depth:false, stencil:false,
+                                    premultipliedAlpha:false, preserveDrawingBuffer:true}); }
+  catch(e){ fail='WebGL2 context threw: '+e.message; }
+  if(!gl) fail = fail || 'WebGL2 is not available in this browser.';
+  let floatOk=false;
+  if(gl){
+    // Half-float render targets carry the linear pipeline. Without them the
+    // tool would have to fall back to 8-bit gamma buffers, which is the exact
+    // precision loss it exists to expose. So this is a hard requirement.
+    floatOk = !!(gl.getExtension('EXT_color_buffer_float') ||
+                 gl.getExtension('EXT_color_buffer_half_float'));
+    if(!floatOk) fail='This GPU/browser cannot render to floating-point textures '+
+                      '(EXT_color_buffer_float missing).';
   }
-  c.imageSmoothingEnabled=smooth; c.imageSmoothingQuality='high';
-  c.drawImage(img,0,0,iw,ih, (r.x-x0)/f, (r.y-y0)/f, r.w/f, r.h/f);
-  return cropCv;
+  const ok = !!gl && floatOk;
+
+  const SRGB = `
+    vec3 toSrgb(vec3 c){ c=clamp(c,0.0,1.0);
+      return mix(c*12.92, 1.055*pow(c,vec3(1.0/2.4))-0.055, step(0.0031308,c)); }
+    vec3 toLin(vec3 c){ c=clamp(c,0.0,1.0);
+      return mix(c/12.92, pow((c+0.055)/1.055,vec3(2.4)), step(0.04045,c)); }`;
+
+  const VS = `#version 300 es
+    in vec2 aPos; out vec2 vUV;
+    void main(){ vUV=aPos*0.5+0.5; gl_Position=vec4(aPos,0.0,1.0); }`;
+
+  const F = s => `#version 300 es\nprecision highp float;\nprecision highp sampler2D;\n`+SRGB+`
+    uniform sampler2D uTex; in vec2 vUV; out vec4 oCol;\n`+s;
+
+  // exact 2x2 average -- the chain step
+  const FS_HALVE = F(`uniform vec2 uSrc, uDst;
+    void main(){ vec2 d=floor(vUV*uDst)*2.0+0.5; vec2 t=1.0/uSrc;
+      oCol=vec4(0.25*( texture(uTex,d*t).rgb + texture(uTex,(d+vec2(1,0))*t).rgb
+                     + texture(uTex,(d+vec2(0,1))*t).rgb + texture(uTex,(d+vec2(1,1))*t).rgb ),1.0); }`);
+
+  // exact area-weighted box for any ratio up to 8 -- deterministic in every
+  // browser, unlike imageSmoothingQuality which is only a hint
+  const FS_BOX = F(`uniform vec2 uSrc, uDst; uniform int uNearest;
+    void main(){
+      if(uNearest==1){ oCol=vec4(texture(uTex,vUV).rgb,1.0); return; }
+      vec2 ratio=uSrc/uDst; vec2 d=floor(vUV*uDst);
+      vec2 s0=d*ratio, s1=(d+1.0)*ratio;
+      vec3 acc=vec3(0.0); float wsum=0.0;
+      for(int j=0;j<8;j++){
+        float y=floor(s0.y)+float(j); if(y>=s1.y) break;
+        float wy=min(y+1.0,s1.y)-max(y,s0.y); if(wy<=0.0) continue;
+        for(int i=0;i<8;i++){
+          float x=floor(s0.x)+float(i); if(x>=s1.x) break;
+          float wx=min(x+1.0,s1.x)-max(x,s0.x); if(wx<=0.0) continue;
+          acc+=texture(uTex,(vec2(x,y)+0.5)/uSrc).rgb*(wx*wy); wsum+=wx*wy; } }
+      oCol=vec4(acc/max(wsum,1e-6),1.0); }`);
+
+  // place the resampled content into the LED crop, black outside the content
+  const FS_PLACE = F(`uniform vec2 uLedSize, uCropOrigin; uniform float uDecim;
+    uniform vec4 uRect;
+    void main(){
+      vec2 led=floor(vUV*uLedSize)+0.5;
+      vec2 nat=uCropOrigin+led*uDecim;
+      vec2 uv=(nat-uRect.xy)/uRect.zw;
+      if(uv.x<0.0||uv.y<0.0||uv.x>1.0||uv.y>1.0){ oCol=vec4(0,0,0,1); return; }
+      oCol=vec4(texture(uTex,uv).rgb,1.0); }`);
+
+  // bit depth / PWM: quantise in the SIGNAL domain, which is what produces
+  // near-black posterisation on a real panel
+  const FS_QUANT = F(`uniform float uLevels;
+    void main(){ vec3 sig=toSrgb(texture(uTex,vUV).rgb);
+      sig=floor(sig*uLevels+0.5)/uLevels;
+      oCol=vec4(toLin(sig),1.0); }`);
+
+  // screen composite: analytic fill coverage, brightness gain, ambient
+  const FS_COMP = F(`
+    uniform sampler2D uContent;
+    uniform vec2 uView, uOrigin, uCell, uNative, uLedSize, uCropOrigin;
+    uniform vec4 uRect;
+    uniform float uDecim, uFill, uGain, uAmb, uOffGain; uniform int uIdeal, uGrid;
+    // antiderivative of the lit-area indicator, so coverage is exact at any
+    // footprint -- no threshold, no skipped gap, and it converges smoothly to
+    // the fill factor when a screen pixel spans several cells
+    float Fi(float t,float s){ float n=floor(t); float f=t-n; float lo=(1.0-s)*0.5;
+      return n*s+clamp(f-lo,0.0,s); }
+    float cov1(float x,float w,float s){
+      if(w<1e-5){ float f=fract(x); float lo=(1.0-s)*0.5;
+                  return (f>=lo&&f<=lo+s)?1.0:0.0; }
+      return (Fi(x+0.5*w,s)-Fi(x-0.5*w,s))/w; }
+    void main(){
+      vec2 frag=vUV*uView;
+      vec2 wall=(frag-uOrigin)/uCell;
+      vec3 col=vec3(0.0);
+      if(wall.x>=0.0&&wall.y>=0.0&&wall.x<uNative.x&&wall.y<uNative.y){
+        if(uIdeal==1){
+          vec2 uv=(wall-uRect.xy)/uRect.zw;
+          col = (uv.x<0.0||uv.y<0.0||uv.x>1.0||uv.y>1.0) ? vec3(0.0)
+                                                         : texture(uContent,uv).rgb;
+        } else {
+          vec2 uv=((wall-uCropOrigin)/uDecim)/uLedSize;
+          col=texture(uTex,uv).rgb;
+          if(uGrid==1){
+            float s=sqrt(uFill);
+            vec2 w=1.0/uCell;
+            col*=cov1(wall.x,w.x,s)*cov1(wall.y,w.y,s)*uGain;
+          }
+        }
+        col*=uOffGain;
+        col=(col+uAmb)/(1.0+uAmb);      // reflected ambient, renormalised to white
+      }
+      oCol=vec4(col,1.0); }`);
+
+  const FS_BLUR = F(`uniform vec2 uDir; uniform float uSigma; uniform int uRadius;
+    void main(){ vec3 acc=texture(uTex,vUV).rgb; float wsum=1.0;
+      for(int i=1;i<=96;i++){ if(i>uRadius) break;
+        float w=exp(-0.5*float(i*i)/(uSigma*uSigma));
+        acc+=(texture(uTex,vUV+uDir*float(i)).rgb+texture(uTex,vUV-uDir*float(i)).rgb)*w;
+        wsum+=2.0*w; }
+      oCol=vec4(acc/wsum,1.0); }`);
+
+  // Every pass above addresses textures in TOP-DOWN space (v=0 is the image's
+  // first row, which is what FLIP_Y=false gives us, and what the wall geometry
+  // assumes). GL presents v=0 at the bottom of the screen, so the single flip
+  // that reconciles the two belongs here, at the end, exactly once.
+  const FS_PRESENT = F(`void main(){
+    oCol=vec4(toSrgb(texture(uTex,vec2(vUV.x,1.0-vUV.y)).rgb),1.0); }`);
+
+  let P={}, quadVAO=null;
+  function compile(src,type){ const s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s);
+    if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
+  function prog(fs){ const p=gl.createProgram();
+    gl.attachShader(p,compile(VS,gl.VERTEX_SHADER));
+    gl.attachShader(p,compile(fs,gl.FRAGMENT_SHADER));
+    gl.bindAttribLocation(p,0,'aPos'); gl.linkProgram(p);
+    if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    const u={}; const n=gl.getProgramParameter(p,gl.ACTIVE_UNIFORMS);
+    for(let i=0;i<n;i++){ const nm=gl.getActiveUniform(p,i).name; u[nm]=gl.getUniformLocation(p,nm); }
+    return {p,u}; }
+
+  if(ok){
+    try{
+      P={halve:prog(FS_HALVE), box:prog(FS_BOX), place:prog(FS_PLACE), quant:prog(FS_QUANT),
+         comp:prog(FS_COMP), blur:prog(FS_BLUR), present:prog(FS_PRESENT)};
+      quadVAO=gl.createVertexArray(); gl.bindVertexArray(quadVAO);
+      const b=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,b);
+      gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
+      gl.bindVertexArray(null);
+    }catch(e){ fail='Shader build failed: '+e.message; }
+  }
+  const live = ok && !!quadVAO && !fail;
+
+  const MAXTEX = live ? gl.getParameter(gl.MAX_TEXTURE_SIZE) : 4096;
+  function tex(w,h,nearest){
+    const t=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,t);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA16F,w,h,0,gl.RGBA,gl.HALF_FLOAT,null);
+    const f=nearest?gl.NEAREST:gl.LINEAR;
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,f);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,f);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    return {t,w,h}; }
+  const pool=[];
+  function grab(w,h,nearest){
+    w=Math.max(1,Math.min(MAXTEX,Math.round(w))); h=Math.max(1,Math.min(MAXTEX,Math.round(h)));
+    for(let i=0;i<pool.length;i++){ const e=pool[i];
+      if(e.w===w&&e.h===h&&e.n===!!nearest){ pool.splice(i,1); return e; } }
+    const e=tex(w,h,nearest); e.n=!!nearest; e.fb=gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER,e.fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,e.t,0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+    return e; }
+  function give(e){ if(e&&pool.length<24) pool.push(e); }
+
+  function pass(pr, inTex, out, setu){
+    gl.useProgram(pr.p); gl.bindVertexArray(quadVAO);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, out?out.fb:null);
+    const w=out?out.w:cv.width, h=out?out.h:cv.height;
+    gl.viewport(0,0,w,h);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,inTex);
+    if(pr.u.uTex) gl.uniform1i(pr.u.uTex,0);
+    if(setu) setu(pr.u);
+    gl.drawArrays(gl.TRIANGLES,0,3);
+    gl.bindVertexArray(null);
+  }
+
+  // source frame -> linear texture (sRGB internal format does the decode)
+  let srcTex=null, srcKey='';
+  function uploadSource(img,w,h,key){
+    if(!srcTex){ srcTex=gl.createTexture(); }
+    if(srcKey===key && key) return srcTex;
+    gl.bindTexture(gl.TEXTURE_2D,srcTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.SRGB8_ALPHA8,gl.RGBA,gl.UNSIGNED_BYTE,img);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    srcKey=key||'';
+    return srcTex; }
+
+  // exact box downsample: halve until within 2x, then one area-weighted pass
+  function boxTo(inTex, sw, sh, dw, dh, nearest){
+    dw=Math.max(1,Math.round(dw)); dh=Math.max(1,Math.round(dh));
+    let cur=inTex, cw=sw, ch=sh, owned=null;
+    if(!nearest){
+      while(cw>dw*2 && ch>dh*2){
+        const nw=Math.max(dw,Math.floor(cw/2)), nh=Math.max(dh,Math.floor(ch/2));
+        if(nw===cw&&nh===ch) break;
+        const out=grab(nw,nh,false);
+        pass(P.halve,cur,out,u=>{ gl.uniform2f(u.uSrc,cw,ch); gl.uniform2f(u.uDst,nw,nh); });
+        give(owned); owned=out; cur=out.t; cw=out.w; ch=out.h;
+      }
+    }
+    const out=grab(dw,dh,true);
+    const fcw=cw, fch=ch;
+    pass(P.box,cur,out,u=>{ gl.uniform2f(u.uSrc,fcw,fch); gl.uniform2f(u.uDst,out.w,out.h);
+                            gl.uniform1i(u.uNearest,nearest?1:0); });
+    give(owned);
+    return out; }
+
+  return {cv, gl, live, fail, MAXTEX, P, pass, grab, give, boxTo, uploadSource,
+          get width(){return cv.width;}, get height(){return cv.height;},
+          size(w,h){ if(cv.width!==w) cv.width=w; if(cv.height!==h) cv.height=h; }};
+})();
+
+/* Photometry: the ambient wash is derived from numbers a client actually has
+   on a spec sheet, rather than an arbitrary percentage wearing a percent sign.
+   Reflected luminance off the panel face = lux * reflectance / pi  [nits].
+   The image transform stays display-relative -- a monitor cannot show 1000
+   nits and the tool must not pretend otherwise -- but the contrast ratio it
+   implies is quotable in the integrator's own language. */
+function ambientFraction(){
+  if(S.ambMode==='manual') return S.ambient;
+  const reflected = S.lux*S.reflect/Math.PI;
+  return clamp(reflected/Math.max(1,S.nits), 0, 4);
 }
+function contrastRatio(){ const a=ambientFraction(); return a<=1e-6 ? Infinity : (1+a)/a; }
 
 /* ================= view scale ================= */
 function ppmmDev(){ return S.ppmmCss*(window.devicePixelRatio||1); }
 
+// Fit mode reserves room beside the wall for the scale figure, rather than
+// letting it overlap the content being judged or silently vanish off-frame.
+// The figure is 1.75 m of a wallW-wide wall, so the space it needs is a pure
+// function of the wall's width in metres.
+function figMargin(){
+  if(!S.figure || S.zoomMode!=='fit') return 0;
+  return Math.min(0.34, 1.55*0.28*1.75/Math.max(0.5,S.wallW));
+}
 // Screen device-px per wall pixel.
 function cellPx(pitch, VW, VH){
   const {nx,ny}=nativeRes(pitch);
-  if(S.zoomMode==='fit')  return Math.min(VW/nx, VH/ny);
+  if(S.zoomMode==='fit')  return Math.min(VW*(1-figMargin())/nx, VH*0.97/ny);
   if(S.zoomMode==='one')  return pitch*ppmmDev();
   if(S.zoomMode==='eye'){
     // Wall subtends the same angle from monDist as it does from S.dist.
@@ -440,48 +689,19 @@ function renderView(cv, off, pitch, ideal, dims){
   const VW = dims ? dims.w : Math.max(1,Math.round(cv.clientWidth*dpr));
   const VH = dims ? dims.h : Math.max(1,Math.round(cv.clientHeight*dpr));
   if(cv.width!==VW||cv.height!==VH){ cv.width=VW; cv.height=VH; }
-  if(off.width!==VW) off.width=VW;
-  if(off.height!==VH) off.height=VH;
-  const o=off.getContext('2d');
-  o.setTransform(1,0,0,1,0,0); o.globalCompositeOperation='source-over'; o.globalAlpha=1;
-  o.filter='none';
-  o.fillStyle='#000'; o.fillRect(0,0,VW,VH);
 
   const {nx,ny}=nativeRes(pitch);
   const cell=cellPx(pitch,VW,VH);
   const dw=nx*cell, dh=ny*cell;
-  const ox=(VW-dw)/2 + S.panX*dpr, oy=(VH-dh)/2 + S.panY*dpr;
+  // Shift right by half the reserved margin so the slack lands on the figure's
+  // side rather than being split evenly and leaving it clipped.
+  const ox=(VW-dw)/2 + figMargin()*VW/2 + S.panX*dpr, oy=(VH-dh)/2 + S.panY*dpr;
   let decim=1;                                  // >1 = native buffer decimated
   let gridDrawn=false;                          // were physical gaps actually drawn?
 
-  if(S.src){
-    if(ideal){
-      // Reference wall: infinite resolution, same geometry, same eye filter.
-      const r=contentRect(nx,ny);
-      o.imageSmoothingEnabled=true; o.imageSmoothingQuality='high';
-      o.drawImage(S.src,0,0,S.srcW,S.srcH, ox+r.x*cell, oy+r.y*cell, r.w*cell, r.h*cell);
-    } else {
-      const x0=clamp(Math.floor(-ox/cell),0,nx), y0=clamp(Math.floor(-oy/cell),0,ny);
-      const x1=clamp(Math.ceil((VW-ox)/cell),0,nx), y1=clamp(Math.ceil((VH-oy)/cell),0,ny);
-      const cw=x1-x0, ch=y1-y0;
-      if(cw>0&&ch>0){
-        decim=Math.max(1,Math.ceil(Math.max(cw,ch)/CROP_CAP));
-        const crop=buildNativeCrop(pitch,x0,y0,cw,ch,decim);
-        // Emissive pixels are hard-edged, but a decimated buffer must filter.
-        o.imageSmoothingEnabled = decim>1;
-        o.imageSmoothingQuality='high';
-        o.drawImage(crop,0,0,crop.width,crop.height, ox+x0*cell, oy+y0*cell, cw*cell, ch*cell);
-        // physical inter-pixel gap
-        const gap=cell*(1-Math.sqrt(S.fill));
-        if(S.grid && cell>=3 && gap>=.6){
-          o.fillStyle='#000';
-          for(let i=x0;i<=x1;i++){ const x=ox+i*cell-gap/2; o.fillRect(x,oy+y0*cell,gap,ch*cell); }
-          for(let j=y0;j<=y1;j++){ const y=oy+j*cell-gap/2; o.fillRect(ox+x0*cell,y,cw*cell,gap); }
-          gridDrawn=true;
-        }
-      }
-    }
-  }
+  const gl=GLE.gl;
+  GLE.size(VW,VH);
+  const r=contentRect(nx,ny);
 
   // Eye acuity low-pass, minus what the monitor+your own eyes already do.
   // absBlur (used for PNG export) bakes the audience's acuity in full, because
@@ -491,37 +711,161 @@ function renderView(cv, off, pitch, ideal, dims){
   const sMon    = (MM_PER_M*(S.monDist/1000)*ppmmDev())/FWHM;
   const sAdd    = S.absBlur ? sTarget
                             : Math.sqrt(Math.max(0, sTarget*sTarget - sMon*sMon));
+  const amb  = ambientFraction();
+  const offGain = offAxisGain();
 
-  // A real wall is calibrated to its rated nits whatever the fill factor: the
-  // LEDs are driven harder to compensate. Drawing black gaps without restoring
-  // the mean would tax low-fill (SMD) walls for a brightness loss they do not
-  // have, and would make the same wall change tone between zoom modes.
-  const gain = gridDrawn ? 1/Math.max(.05,S.fill) : 1;
-  const amb  = S.ambient;                                 // 0..1 black lift
-  const fx=[];
-  if(S.blur && sAdd>=.35) fx.push(`blur(${sAdd.toFixed(2)}px)`);
-  if(gain!==1 || amb>0)   fx.push(`brightness(${(gain*(1-amb)).toFixed(3)})`);
+  if(S.src){
+    const srcT = GLE.uploadSource(S.src, S.srcW, S.srcH, S.isVideo?'':(S.name+S.srcW+S.srcH));
+    let scene;
+    if(ideal){
+      // Reference wall: no LED grid at all, box-filtered straight to the screen
+      // resolution of the content, so the ONLY difference from the real wall is
+      // what the pitch costs.
+      const cwpx=Math.max(1,Math.min(GLE.MAXTEX,Math.round(r.w*cell)));
+      const chpx=Math.max(1,Math.min(GLE.MAXTEX,Math.round(r.h*cell)));
+      const content=GLE.boxTo(srcT,S.srcW,S.srcH,cwpx,chpx,false);
+      scene=GLE.grab(VW,VH,false);
+      GLE.pass(GLE.P.comp, content.t, scene, u=>{
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,content.t);
+        gl.uniform1i(u.uContent,1);
+        gl.uniform2f(u.uView,VW,VH); gl.uniform2f(u.uOrigin,ox,oy);
+        gl.uniform2f(u.uCell,cell,cell); gl.uniform2f(u.uNative,nx,ny);
+        gl.uniform2f(u.uLedSize,1,1); gl.uniform2f(u.uCropOrigin,0,0);
+        gl.uniform4f(u.uRect,r.x,r.y,r.w,r.h);
+        gl.uniform1f(u.uDecim,1); gl.uniform1f(u.uFill,S.fill);
+        gl.uniform1f(u.uGain,1); gl.uniform1f(u.uAmb,amb);
+        gl.uniform1f(u.uOffGain,offGain);
+        gl.uniform1i(u.uIdeal,1); gl.uniform1i(u.uGrid,0); });
+      GLE.give(content);
+    } else {
+      const x0=clamp(Math.floor(-ox/cell),0,nx), y0=clamp(Math.floor(-oy/cell),0,ny);
+      const x1=clamp(Math.ceil((VW-ox)/cell),0,nx), y1=clamp(Math.ceil((VH-oy)/cell),0,ny);
+      const cw=Math.max(1,x1-x0), ch=Math.max(1,y1-y0);
+      const capTex=Math.min(CROP_CAP,GLE.MAXTEX);
+      decim=Math.max(1,Math.ceil(Math.max(cw,ch)/capTex));
+      const lw=Math.max(1,Math.round(cw/decim)), lh=Math.max(1,Math.round(ch/decim));
+
+      // 1. exact area-average of the source down to LED density
+      const content=GLE.boxTo(srcT,S.srcW,S.srcH,
+                              Math.max(1,Math.round(r.w/decim)),
+                              Math.max(1,Math.round(r.h/decim)),
+                              S.scaler==='cheap');
+      // 2. place it into the LED crop (black outside the content)
+      let led=GLE.grab(lw,lh,true);
+      GLE.pass(GLE.P.place, content.t, led, u=>{
+        gl.uniform2f(u.uLedSize,lw,lh);
+        gl.uniform2f(u.uCropOrigin,x0,y0);
+        gl.uniform1f(u.uDecim,decim);
+        gl.uniform4f(u.uRect,r.x,r.y,r.w,r.h); });
+      GLE.give(content);
+      // 3. bit depth / PWM quantisation, in the signal domain
+      if(S.bits<16){
+        const levels=Math.max(1,Math.pow(2,S.bits)*Math.max(0.02,S.wallBright)-1);
+        const q=GLE.grab(lw,lh,true);
+        GLE.pass(GLE.P.quant, led.t, q, u=>gl.uniform1f(u.uLevels,levels));
+        GLE.give(led); led=q;
+      }
+      // 4. composite to screen with analytic fill coverage
+      scene=GLE.grab(VW,VH,false);
+      GLE.pass(GLE.P.comp, led.t, scene, u=>{
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,led.t);
+        gl.uniform1i(u.uContent,1);
+        gl.uniform2f(u.uView,VW,VH); gl.uniform2f(u.uOrigin,ox,oy);
+        gl.uniform2f(u.uCell,cell,cell); gl.uniform2f(u.uNative,nx,ny);
+        gl.uniform2f(u.uLedSize,lw,lh); gl.uniform2f(u.uCropOrigin,x0,y0);
+        gl.uniform4f(u.uRect,r.x,r.y,r.w,r.h);
+        gl.uniform1f(u.uDecim,decim); gl.uniform1f(u.uFill,S.fill);
+        gl.uniform1f(u.uGain,1/Math.max(.05,S.fill)); gl.uniform1f(u.uAmb,amb);
+        gl.uniform1f(u.uOffGain,offGain);
+        gl.uniform1i(u.uIdeal,0); gl.uniform1i(u.uGrid,S.grid?1:0); });
+      GLE.give(led);
+      gridDrawn=S.grid;
+    }
+
+    // 5. acuity blur, separable, in linear light. Large sigma is handled by
+    //    box-downsampling first: a Gaussian commutes with correct downsampling
+    //    to far inside the error budget of the acuity model itself.
+    if(S.blur && sAdd>=0.35){
+      let sig=sAdd, sw=VW, sh=VH, work=scene, shrunk=null;
+      if(sig>8){
+        const kf=Math.min(16,Math.ceil(sig/8));
+        sw=Math.max(1,Math.round(VW/kf)); sh=Math.max(1,Math.round(VH/kf));
+        shrunk=GLE.boxTo(scene.t,VW,VH,sw,sh,false);
+        work=shrunk; sig=sig/kf;
+      }
+      const rad=Math.min(96,Math.ceil(3*sig));
+      const h1=GLE.grab(work.w,work.h,true);
+      GLE.pass(GLE.P.blur, work.t, h1, u=>{ gl.uniform2f(u.uDir,1/work.w,0);
+        gl.uniform1f(u.uSigma,sig); gl.uniform1i(u.uRadius,rad); });
+      const h2=GLE.grab(work.w,work.h,false);
+      GLE.pass(GLE.P.blur, h1.t, h2, u=>{ gl.uniform2f(u.uDir,0,1/work.h);
+        gl.uniform1f(u.uSigma,sig); gl.uniform1i(u.uRadius,rad); });
+      GLE.give(h1); GLE.give(shrunk); GLE.give(scene);
+      scene=h2;
+    }
+    // 6. encode to sRGB and present
+    GLE.pass(GLE.P.present, scene.t, null);
+    GLE.give(scene);
+  } else {
+    gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+    gl.viewport(0,0,VW,VH); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
+  }
 
   const c=cv.getContext('2d');
   c.setTransform(1,0,0,1,0,0);
   c.globalCompositeOperation='source-over'; c.globalAlpha=1;
-  c.clearRect(0,0,VW,VH);
-  c.filter = fx.length ? fx.join(' ') : 'none';
-  c.drawImage(off,0,0);
   c.filter='none';
-  // Ambient reflection off the panel face: spatially flat, so it is added after
-  // the eye filter. out = amb + (1-amb)*in  -> blacks lift, white stays white.
-  if(amb>0){
-    // Only the panel face reflects light — not the void around the wall.
-    const rx=Math.max(0,ox), ry=Math.max(0,oy);
-    const rw=Math.min(VW,ox+nx*cell)-rx, rh=Math.min(VH,oy+ny*cell)-ry;
-    if(rw>0&&rh>0){
-      c.globalCompositeOperation='lighter';
-      c.globalAlpha=amb; c.fillStyle='#fff'; c.fillRect(rx,ry,rw,rh);
-      c.globalAlpha=1; c.globalCompositeOperation='source-over';
-    }
+  c.clearRect(0,0,VW,VH);
+  c.drawImage(GLE.cv,0,0);
+  // Scale figure is instrument chrome, drawn AFTER the simulation and never
+  // through it: running a person through gap/blur/ambient would claim "this is
+  // what someone looks like standing there", which the tool cannot back.
+  const figVisible = S.figure ? drawFigure(c,ox,oy,cell,pitch,nx,ny,VW,VH) : true;
+  return {cell,nx,ny,ox,oy,sTarget,sMon,decim,gridDrawn,amb,figVisible};
+}
+
+/* A flat 1.75 m silhouette standing at the WALL PLANE, just outside the left
+   edge. At the wall plane its scale is pure arithmetic and correct in every
+   zoom mode by construction. Putting it on a floor or near the viewer would
+   imply a ground plane and camera this tool does not model — that figure
+   would be a lie. It never moves to stay in frame, for the same reason. */
+function drawFigure(c,ox,oy,cell,pitch,nx,ny,VW,VH){
+  const hPx = (1750/pitch)*cell;                 // 1.75 m in wall px -> screen px
+  if(hPx<12) return true;                        // too small to mean anything
+  const baseY = oy+ny*cell;                      // wall bottom edge
+  const w = hPx*0.28;
+  const x = ox - w*1.5;                          // outside the wall, never over content
+  const top = baseY-hPx;
+  if(x+w<0 || x>VW || baseY<0 || top>VH) return false;
+  c.save();
+  c.globalAlpha=0.85; c.fillStyle='#8b939e'; c.strokeStyle='#0e1013'; c.lineWidth=Math.max(1,hPx*0.012);
+  const cx=x+w/2, headR=hPx*0.062;
+  c.beginPath(); c.arc(cx, top+headR, headR, 0, Math.PI*2); c.fill(); c.stroke();
+  c.beginPath();                                  // torso + legs, one simple mass
+  c.moveTo(cx-w*0.34, top+headR*2.5);
+  c.lineTo(cx+w*0.34, top+headR*2.5);
+  c.lineTo(cx+w*0.30, top+hPx*0.55);
+  c.lineTo(cx+w*0.26, baseY);
+  c.lineTo(cx+w*0.06, baseY);
+  c.lineTo(cx,        top+hPx*0.62);
+  c.lineTo(cx-w*0.06, baseY);
+  c.lineTo(cx-w*0.26, baseY);
+  c.lineTo(cx-w*0.30, top+hPx*0.55);
+  c.closePath(); c.fill(); c.stroke();
+  if(hPx>60){
+    c.globalAlpha=1; c.fillStyle='#8b939e';
+    c.font=`${Math.max(9,Math.min(15,hPx*0.09))}px ui-monospace,Consolas,monospace`;
+    c.textAlign='center'; c.fillText('1.75 m', cx, baseY+hPx*0.13);
   }
-  return {cell,nx,ny,ox,oy,sTarget,sMon,decim,gridDrawn};
+  c.restore();
+  return true;
+}
+
+/* Off-axis: a typical SMD luminance rolloff. Panels genuinely differ, so the
+   label carries the honesty — this is a representative curve, not a datasheet. */
+function offAxisGain(){
+  const t=S.offAxis*Math.PI/180;
+  return Math.pow(Math.max(0,Math.cos(t)), 1.35);
 }
 
 let geoA=null, geoB=null;
@@ -613,6 +957,20 @@ function updateReadout(){
   const ang = 2*Math.atan((S.wallW/2)/S.dist)*180/Math.PI;
   $('roSub').textContent = ang.toFixed(0)+'°';
 
+  const cr=contrastRatio(), amb=ambientFraction();
+  const ce=$('roContrast');
+  ce.textContent = cr===Infinity ? '∞' : (cr>=1000? (cr/1000).toFixed(1)+'k:1' : Math.round(cr)+':1');
+  ce.className = cr>=400?'ok':cr>=80?'mid':'no';
+  if(S.ambMode==='photo'){
+    const refl=S.lux*S.reflect/Math.PI;
+    $('photoHint').innerHTML=`Reflected off the face ≈ <b>${refl.toFixed(1)} nits</b> against a `+
+      `${S.nits} nit panel → black sits at <b>${(100*amb/(1+amb)).toFixed(1)}%</b> of white, `+
+      `on-site contrast ≈ <b>${cr===Infinity?'∞':Math.round(cr)}:1</b>. Estimate — derived from `+
+      `lux × reflectance ÷ π, not measured.`;
+  } else {
+    $('photoHint').innerHTML=`Manual wash: black sits at <b>${(100*amb/(1+amb)).toFixed(1)}%</b> of white.`;
+  }
+
   $('distHint').innerHTML =
     `At <b>${S.dist.toFixed(1)} m</b> the eye resolves <b>${r_mm.toFixed(2)} mm</b>. ` +
     (ratio>=1 ? `Your ${S.pitchA} mm pitch is <b>coarser</b> than that — pixels are individually visible.`
@@ -622,8 +980,7 @@ function updateReadout(){
   // On-screen scale vs. real size, and the distance your own eye is effectively at.
   const zl = geoA ? (geoA.cell/S.pitchA/ppmmDev()) : 1;
   const equiv = (S.monDist/1000)/Math.max(1e-6,zl);   // metres
-  let txt = (HAS_FILTER?'':'⚠ NO CANVAS FILTER — acuity blur unavailable in this browser · ')
-    + (S.calibrated?'':'⚠ UNCALIBRATED · ')
+  let txt = (S.calibrated?'':'⚠ UNCALIBRATED · ')
     + `${S.zoomMode==='eye'?'EYE-MATCH':S.zoomMode.toUpperCase()} · ${(zl*100).toFixed(1)}% of real size · your eye ≈ ${equiv.toFixed(1)} m from this wall`;
   if(geoA){
     const cov = Math.min(1, $('cvA').width/(geoA.nx*geoA.cell));
@@ -631,19 +988,19 @@ function updateReadout(){
     // Your own eye is the tighter limit: you are seeing LESS than the audience.
     if(equiv > S.dist*1.15)
       txt += ` · ⚠ shown smaller than the audience's view — zoom in to judge detail`;
-    // The monitor physically cannot draw a gap thinner than a screen pixel, so
-    // in exactly the band where the pitch decision is live the view can look
-    // clean while the readout says the audience would see structure. Say so on
-    // the canvas, not only up here.
-    const undrawable = geoA.cell<3 && S.pitchA >= MM_PER_M*S.dist*0.6;
-    if(undrawable) txt += ` · ⚠ gap too fine to draw — use 1:1 to inspect structure`;
-    const banner=$('structBanner');
-    banner.style.display = undrawable ? 'block' : 'none';
-    banner.textContent = 'Structure not renderable at this zoom — the readout says the audience '
-      + 'would see it. Switch to 1:1 to inspect.';
-    // Wall too large to buffer at native res; filtered preview, readouts exact.
+    // The gap is now computed as analytic sub-pixel coverage, so there is no
+    // threshold below which it silently disappears — it fades continuously and
+    // converges to the fill factor, which is what physically happens.
     if(geoA.decim>1)
-      txt += ` · preview filtered ${geoA.decim}:1 (wall too large to buffer natively — readouts still exact)`;
+      txt += ` · LED grid box-averaged ${geoA.decim}:1 (exact: several LEDs fall inside one screen pixel)`;
+    if(S.figure && geoA.figVisible===false) txt += ` · scale figure out of frame`;
+    // Near-unity resampling is where real walls shimmer.
+    if(S.src){
+      const {nx}=nativeRes(S.pitchA), rr=contentRect(nx,nativeRes(S.pitchA).ny);
+      const sc=rr.w/S.srcW;
+      if(sc>0.85 && sc<1.15 && Math.abs(sc-1)>0.001)
+        txt += ` · ⚠ moiré risk: content is at ${(sc*100).toFixed(0)}% of native`;
+    }
   }
   $('zoomLbl').textContent = txt;
 }
@@ -685,6 +1042,22 @@ num('wallW','wallW'); num('wallH','wallH'); num('pitchA','pitchA'); num('pitchB'
 
 $('fill').oninput=e=>{ S.fill=e.target.value/100; $('fillV').textContent=e.target.value+'%'; draw(); };
 $('amb').oninput =e=>{ S.ambient=e.target.value/100; $('ambV').textContent=e.target.value+'%'; draw(); };
+$('bits').onchange=e=>{ S.bits=+e.target.value; draw(); };
+$('wbright').oninput=e=>{ S.wallBright=e.target.value/100; $('wbrightV').textContent=e.target.value+'%'; draw(); };
+$('offax').oninput=e=>{ S.offAxis=+e.target.value; $('offaxV').textContent=e.target.value+'°'; draw(); };
+$('nits').oninput=e=>{ const v=parseFloat(e.target.value); if(isFinite(v)&&v>0){S.nits=v;draw();} };
+$('lux').oninput =e=>{ const v=parseFloat(e.target.value); if(isFinite(v)&&v>=0){S.lux=v;draw();} };
+$('reflect').onchange=e=>{ S.reflect=+e.target.value; draw(); };
+$('ambMode').onchange=e=>{ S.ambMode=e.target.value;
+  const photo=S.ambMode==='photo';
+  ['rowNits','rowLux','rowRefl'].forEach(id=>$(id).style.display=photo?'flex':'none');
+  $('luxChips').style.display=photo?'flex':'none';
+  $('rowManual').style.display=photo?'none':'flex';
+  draw(); };
+[['blackout',10],['office / lit hall',400],['bright booth',1200],['daylight-adjacent',5000]]
+  .forEach(([nm,v])=>{ const c=document.createElement('div'); c.className='chip'; c.textContent=nm;
+    c.onclick=()=>{ S.lux=v; $('lux').value=v; draw(); }; $('luxChips').appendChild(c); });
+$('tFig').onclick=e=>{ S.figure=!S.figure; e.target.classList.toggle('on',S.figure); draw(); };
 
 function setDist(v){ S.dist=clamp(v,.3,200); $('dist').value=Math.min(60,S.dist); $('distN').value=S.dist.toFixed(1); $('distV').textContent=S.dist.toFixed(1)+' m'; draw(); }
 $('dist').oninput=e=>setDist(parseFloat(e.target.value));
@@ -921,9 +1294,14 @@ function exportPng(btn){
   c.fillText(`Angularly true only when viewed from ${ratio.toFixed(2)} × its displayed width`+
              `  (e.g. 25 cm wide → view from ${(25*ratio).toFixed(0)} cm). Otherwise indicative only.`,
              120, a.height+86);
+  const cr=contrastRatio();
   c.fillStyle='#5f6873';
-  c.fillText(`zoom: ${S.zoomMode}   ·   fill ${(S.fill*100)|0}%   ·   ambient ${(S.ambient*100)|0}%`+
-             `   ·   audience acuity baked in`, 120, a.height+110);
+  c.fillText(`zoom ${S.zoomMode} · fill ${(S.fill*100)|0}% · ${S.bits<16?S.bits+'-bit':'unquantised'}`+
+             ` @ ${(S.wallBright*100)|0}% drive · ${S.ambMode==='photo'
+                ? `${S.nits} nits / ${S.lux} lux / ${(S.reflect*100).toFixed(0)}% face`
+                : `manual wash ${(S.ambient*100)|0}%`}`+
+             ` · contrast ≈ ${cr===Infinity?'∞':Math.round(cr)}:1 · ${S.offAxis}° off-axis`+
+             ` · linear-light GPU render · audience acuity baked in`, 120, a.height+110);
 
   S.absBlur=wasAbs; draw();
 
@@ -943,12 +1321,102 @@ function exportPng(btn){
 
 /* ---------- debug / scripting handle ---------- */
 window.SQUINT = { S, nativeRes, contentRect, cellPx, draw, ppmmDev, viewUnder,
-                  geo:()=>geoA, geoB:()=>geoB, HAS_FILTER, ARCMIN_RAD, MM_PER_M };
+                  geo:()=>geoA, geoB:()=>geoB, ARCMIN_RAD, MM_PER_M,
+                  GLE, selftest, ambientFraction, contrastRatio, offAxisGain };
+
+/* ---------- self-test ----------
+   Runs the REAL pipeline on synthetic patterns at boot and checks two things
+   that must hold if the physics is wired up correctly:
+     1. a 50/50 black/white field, fused, must land on sRGB 188 (linear 0.5).
+        Gamma-space fusion lands on 128 — this single number is the difference
+        between the tool being right and being confidently wrong.
+     2. mean brightness must not move when fill factor changes, at any zoom.
+   Failures are shown, not swallowed: a silent instrument is the thing this
+   whole tool exists to argue against. */
+function selftest(quiet){
+  if(!GLE.live) return null;
+  const keep={src:S.src,srcW:S.srcW,srcH:S.srcH,isVideo:S.isVideo,name:S.name,
+    wallW:S.wallW,wallH:S.wallH,pitchA:S.pitchA,fill:S.fill,bits:S.bits,
+    zoomMode:S.zoomMode,zoomFree:S.zoomFree,dist:S.dist,ambMode:S.ambMode,
+    ambient:S.ambient,offAxis:S.offAxis,figure:S.figure,mode:S.mode,
+    panX:S.panX,panY:S.panY,grid:S.grid,blur:S.blur,wallBright:S.wallBright};
+  const res={pass:true,checks:[]};
+  try{
+    const N=64, cvT=document.createElement('canvas'); cvT.width=N; cvT.height=N;
+    const ct=cvT.getContext('2d');
+    for(let y=0;y<N;y++) for(let x=0;x<N;x++){
+      ct.fillStyle=((x+y)&1)?'#fff':'#000'; ct.fillRect(x,y,1,1); }
+    S.src=cvT; S.srcW=N; S.srcH=N; S.isVideo=false; S.name='selftest';
+    S.mode='sim'; S.fitMode='stretch'; S.panX=S.panY=0; S.figure=false;
+    S.ambMode='manual'; S.ambient=0; S.offAxis=0; S.bits=16; S.wallBright=1;
+    S.grid=true; S.blur=true; S.dist=5; S.wallW=1; S.wallH=1;
+    S.zoomMode='free'; S.zoomFree=1;
+
+    // 1. linear-light fusion. Each LED averages an 8x8 block of the checker, so
+    //    its value must be linear 0.5 -> sRGB 188. Gap off, because at this zoom
+    //    a lit LED carries the 1/fill gain and would read as clipped white.
+    S.pitchA=125; S.grid=false; S.zoomFree=1;      // 1 m / 125 mm = 8 x 8 LEDs
+    draw();
+    const cv=$('cvA'), g=geoA;
+    const cxp=Math.round(g.ox+g.nx*g.cell*0.5), cyp=Math.round(g.oy+g.ny*g.cell*0.5);
+    const d=cv.getContext('2d').getImageData(cxp-4,cyp-4,8,8).data;
+    let s=0,n=0; for(let i=0;i<d.length;i+=4){s+=d[i];n++;}
+    const fused=s/n;
+    res.checks.push({name:'linear-light fusion (expect ~188, gamma would be ~128)',
+                     value:+fused.toFixed(1), pass:Math.abs(fused-188)<=6});
+
+    // 2. fill factor must not change mean brightness. This has to be measured
+    //    in the FUSED regime (several LEDs per screen pixel). Zoomed in far
+    //    enough to resolve individual emitters, bright content legitimately
+    //    clips instead: a 25%-fill wall drives its LEDs at 4x the average
+    //    luminance, and an SDR monitor cannot show that. Clipping there is the
+    //    honest answer, so it is not what this check is about.
+    S.grid=true; S.wallW=12; S.wallH=6; S.pitchA=1.2; S.zoomMode='fit'; S.fill=0.9; draw();
+    const m1=meanOf($('cvA'));
+    S.fill=0.25; draw();
+    const m2=meanOf($('cvA'));
+    const drift=Math.abs(m1-m2)/Math.max(1,m1)*100;
+    res.checks.push({name:'mean brightness invariant to fill 90%->25%',
+                     value:+drift.toFixed(2)+'%', pass:drift<2.5});
+  }catch(e){
+    res.checks.push({name:'self-test threw',value:e.message,pass:false});
+  }
+  Object.assign(S,keep);
+  draw();
+  res.pass=res.checks.every(c=>c.pass);
+  if(!res.pass && !quiet){
+    const b=$('structBanner');
+    b.style.display='block';
+    b.style.borderColor='var(--bad)'; b.style.color='var(--bad)';
+    b.textContent='SELF-TEST FAILED: '+res.checks.filter(c=>!c.pass)
+      .map(c=>c.name+' = '+c.value).join('; ')+'. Do not trust these numbers.';
+  }
+  return res;
+}
+function meanOf(cv){
+  const d=cv.getContext('2d').getImageData(0,0,cv.width,cv.height).data;
+  let s=0,n=0; for(let i=0;i<d.length;i+=40){s+=d[i];n++;} return s/n;
+}
 
 /* ---------- boot ---------- */
-applyCal(false);
-setDist(5);
-draw();
+// A measuring instrument that cannot run its own equations must say so, not
+// quietly render an approximation and let it be mistaken for a simulation.
+if(!GLE.live){
+  const d=$('drop'); d.classList.remove('hide');
+  d.innerHTML='<h2 style="color:var(--bad)">SQUINT cannot render on this machine</h2>'+
+    '<p>'+(GLE.fail||'WebGL2 unavailable')+'</p>'+
+    '<p>The simulation runs in linear light on the GPU because that is the only way '+
+    'to compute it correctly. There is deliberately no fallback: a canvas-2D path '+
+    'would render a different, gamma-space answer and present it as the same '+
+    'measurement. SQUINT will not do that.</p>'+
+    '<p>Try a current Chrome, Edge or Firefox with hardware acceleration enabled.</p>';
+  document.querySelectorAll('#rail input,#rail select,#rail button').forEach(el=>el.disabled=true);
+} else {
+  applyCal(false);
+  setDist(5);
+  draw();
+  selftest();
+}
 </script>
 </body>
 </html>

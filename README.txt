@@ -4,110 +4,141 @@ SQUINT - LED pitch and visual-acuity simulator
 WHAT IT IS
 ----------
 A single self-contained HTML file. Drop in an image or a video, tell it the wall
-size, the pixel pitch, the ambient light and how far the audience stands, and it
-shows you what they will actually see.
+size, the pixel pitch, the panel spec and the room light, and it shows you what
+the audience will actually see - computed in linear light on the GPU.
 
 Nothing is uploaded anywhere. No dependencies, no install, works offline.
 
 
 HOW TO RUN
 ----------
-Double-click squint.html. That is it.
+Double-click squint.html.
 
-If your browser blocks local canvas readback (some file:// configurations), the
-"Save comparison PNG" button is the only thing that will misbehave. In that case
-serve the folder instead:
+It requires WebGL2 with floating-point render targets. If they are missing it
+shows a refusal card instead of rendering. That is deliberate - see NO FALLBACK
+below.
+
+If your browser blocks local canvas readback under file://, only the PNG export
+is affected. Serve the folder instead:
 
     cd "D:\Mishal\Claude Code\SQUINT"
     python -m http.server 8731
     then open  http://127.0.0.1:8731/squint.html
 
 CALIBRATE IT ONCE. Open "Monitor calibration", drag until the box matches a real
-credit card held against the screen, and set your viewing distance. Until you do,
-the top bar reads UNCALIBRATED and the 1:1 and eye-match modes are guesses. This
-is stored per machine.
+credit card held against the screen, and set your viewing distance. Until you
+do, the top bar reads UNCALIBRATED and the 1:1 and eye-match modes are guesses.
 
 
-WHAT IT ACTUALLY SIMULATES
---------------------------
-Five things stack up, in this order:
+THE PIPELINE
+------------
+Every intermediate buffer is RGBA16F holding linear light.
 
-1. NATIVE GRID
-   Wall width divided by pitch gives the real panel resolution. Your content is
-   resampled to exactly that grid. A 12 m wall at 3.9 mm is 3077 px wide - your
-   4K master loses 20% of its detail before anything else happens. This is
-   usually what kills a design, not the pitch itself.
+0. UPLOAD as an sRGB texture, so sampling returns linear values.
 
-2. PHYSICAL PIXEL STRUCTURE
-   Each wall pixel is drawn as a hard-edged lit square with a black gap around
-   it, sized from the fill factor (lit LED area vs. the pitch cell). SMD is
-   roughly 40-55%, GOB/COB roughly 70-90%.
-   Fill factor changes STRUCTURE ONLY. Mean brightness is held constant, because
-   a real wall is calibrated to its rated nits whatever the fill factor - the
-   LEDs are simply driven harder. Without that correction the tool would punish
-   low-fill SMD product for a brightness loss it does not actually have.
+1. NATIVE GRID. Wall width divided by pitch gives the real panel resolution, and
+   your content is resampled onto exactly that grid by a deterministic box
+   filter - repeated exact 2x2 averages, then one area-weighted pass. A 12 m
+   wall at 3.9 mm is 3077 px wide: your 4K master loses 20% of its detail before
+   anything else happens, and that is usually what kills a design, not the pitch.
+   ("Cheap processor" switches to nearest-neighbour, which is what you get from
+   a bad scaler.)
 
-3. AMBIENT WASH
-   Light falling on the panel face lifts blacks and crushes contrast:
-   out = ambient + (1 - ambient) x image. 0% is a blackout room, 10-20% a lit
-   hall, 30%+ daylight or a heavily lit booth. This is the single most common
-   reason a dark, moody grade dies on the floor while looking perfect at your
-   desk. It is a contrast model, not a calibrated photometric one.
+2. BIT DEPTH / PWM. Quantisation happens in the signal domain, which is what a
+   real processor does and why posterisation shows up near black rather than
+   evenly. The "wall driven at X%" control costs you greyscale: at 20% drive an
+   8-bit chain has roughly 6 bits left. Measured on the test card's dark ramp:
+   40 levels at full drive collapse to 9 at 20% drive. That is what bands your
+   dark cinematic grades on a real wall.
 
-4. THE EYE
-   Human acuity is about 1 arcminute. At distance D the eye cannot resolve
-   detail finer than 0.291 mm per metre of distance. That is applied as a
-   low-pass filter, minus whatever your own eye is already doing to your
-   monitor, so the two are not double-counted.
+3. PIXEL STRUCTURE. Each LED is a lit square inside its pitch cell, sized by the
+   fill factor (SMD ~40-55%, GOB/COB ~70-90%). Coverage is computed analytically
+   from each screen pixel's footprint, so the gap fades continuously and
+   converges to the fill factor when a pixel spans several cells - there is no
+   threshold below which it silently disappears. Mean brightness is held
+   constant, because a real wall is calibrated to its rated nits whatever the
+   fill factor: the LEDs are simply driven harder.
 
-5. THE READOUT BAR
-   Live: native resolution, total pixels, how much of your content is being
-   thrown away, what the eye resolves at that distance, whether the grid is
-   visible, and two distances explained below.
+4. LIGHT. Reflected ambient = lux x face reflectance / pi, expressed against the
+   panel's peak nits, applied as (in + amb)/(1 + amb) so black lifts and white
+   stays white. The readout gives you the resulting on-site contrast ratio.
+   Off-axis applies a typical SMD luminance rolloff.
+
+5. THE EYE. Acuity is about 1 arcminute: at distance D the eye cannot resolve
+   detail finer than 0.291 mm per metre. Applied as a separable Gaussian in
+   linear light, minus whatever your own eye is already doing to your monitor so
+   the two are not double-counted.
+
+6. ENCODE back to sRGB.
+
+
+NO FALLBACK, ON PURPOSE
+-----------------------
+There is no canvas-2D path any more. A tool that rendered linear light on one
+machine and gamma-space on another, silently, under the same name and the same
+caption, would be a worse lie than the one this rewrite removed. If the GPU
+cannot run the equations, SQUINT says so and stops.
+
+How much this mattered: the old canvas-2D build fused a 50/50 black-and-white
+field to sRGB 131. The physically correct answer is 188. The test card carries
+that patch with both reference blocks beside it, so you can check the claim
+yourself in about five seconds.
 
 
 THE TWO DISTANCES
 -----------------
 ACUITY LIMIT (3.44 x pitch) is where the pitch equals the eye's 1-arcminute
-resolution limit. It is derived from the acuity constant, not hard-coded.
+resolution limit. Derived from the acuity constant, not hard-coded.
 
-STRUCTURE-FREE AT (5.7 x pitch) is further away, and is where this tool stops
-calling the structure detectable at all. The gap between the two is deliberate:
-a repeating grid stays visible somewhat past the limit for a single isolated
-feature, which is why people still report seeing screen-door slightly beyond the
-textbook "retina" distance.
+STRUCTURE-FREE AT (5.7 x pitch) is further out, and is where this tool stops
+calling the structure detectable at all. The gap is deliberate: a repeating grid
+stays visible somewhat past the limit for a single isolated feature, which is
+why people still see screen-door slightly beyond the textbook retina distance.
 
 Quote the first number to sound like the textbook. Trust the second one.
+
+
+THE SCALE FIGURE
+----------------
+A flat 1.75 m silhouette standing at the wall plane, just outside the left edge.
+At the wall plane its scale is pure arithmetic and correct in every zoom mode by
+construction. It is drawn as instrument chrome, after the simulation and never
+through it - running a person through gap, blur and ambient would claim "this is
+what someone looks like standing there", which the tool cannot back.
+
+It never moves or rescales to stay in frame; a scale reference that follows the
+crop is a scale lie. Fit mode reserves room for it instead. When it is off frame
+the top bar says so. Its height is fixed and not adjustable, for the same reason.
 
 
 THE THREE JOBS
 --------------
 JUDGING YOUR OWN RENDER
-  Mode "Wipe vs. source". Left of the bar is an ideal infinite-resolution wall,
-  right is the real one - same distance, same eye filter, so the only difference
-  is what the pitch costs you.
-  Then "Measure a feature": drag a box over a cap-height letter or the thinnest
-  line that has to read. You get its height in wall pixels, in millimetres, and
-  in arcminutes at the viewing distance, with a verdict. Rules of thumb baked
-  in: under ~6 wall px of cap height or under ~12 arcminutes will not read.
-  In A/B mode the measurement uses whichever view you dragged in, and says so.
+  "Wipe vs. source": left of the bar is an ideal infinite-resolution wall, right
+  is the real one - same distance, same eye filter, same ambient, so the only
+  difference is what the pitch costs you.
+  "Measure a feature": drag a box over a cap-height letter or the thinnest line
+  that must read. You get wall pixels, millimetres and arcminutes with a verdict.
+  Under ~6 wall px of cap height or ~12 arcminutes will not read. In A/B mode it
+  measures whichever view you dragged in, and says so.
 
 SELLING A PITCH TO A CLIENT
-  Mode "A / B pitch". Two pitches, same content, same distance, side by side.
+  "A / B pitch": two pitches, same content, same distance, side by side.
   "Save comparison PNG" bakes in wall size, both pitches, distance, native
-  resolution - AND the viewing contract (see below).
+  resolution, bit depth, drive level, nits/lux, contrast ratio, off-axis angle -
+  and the viewing contract below.
 
 GENERAL SPEC WORK
-  Set the wall and walk the distance slider. Arrow keys nudge it, shift for 5 m.
+  The readout bar is live. Arrow keys walk the viewer distance, shift for 5 m.
 
 
-THE EXPORT CARRIES A VIEWING CONTRACT - READ THIS
--------------------------------------------------
-A pitch simulation is only true at one specific ratio of displayed size to
-viewing distance. A 12 m wall shown as a 25 cm image on a laptop is optically
-the same as standing 50 m back, and every pitch looks flawless at 50 m.
+THE EXPORT CARRIES A VIEWING CONTRACT
+-------------------------------------
+A pitch simulation is only true at one ratio of displayed size to viewing
+distance. A 12 m wall shown as a 25 cm image on a laptop is optically the same
+as standing 50 m back, and every pitch looks flawless at 50 m.
 
-So the exported PNG states the rule directly on the caption strip:
+So the PNG states the rule on its caption strip:
 
     "Angularly true only when viewed from N x its displayed width."
 
@@ -115,61 +146,57 @@ where N = viewer distance / wall width. A 6 m wall viewed from 5 m gives 0.83,
 so a 25 cm-wide slide must be viewed from 21 cm to be honest.
 
 The export also bakes the audience's acuity in ABSOLUTELY rather than relying on
-the recipient's own eye and monitor to supply the difference, since neither is
-knowable. Without both of these the PNG flatters the wall - which matters,
-because the PNG is the artifact that reaches the person signing the cheque.
+the unknown recipient's eye and monitor to supply the difference. Without both,
+the PNG flatters the wall - and the PNG is the artifact that reaches the person
+signing the cheque.
 
 
 ZOOM MODES
 ----------
-EYE-MATCH   Scales the wall so its angular size on your monitor equals the real
-            wall's at the viewer distance. Best for composition and legibility.
-            Caveat: at this scale one LED is roughly one monitor pixel, so the
-            physical gap cannot be drawn. Exactly in the band where the pitch
-            decision is live, the view can look clean while the readout says the
-            audience would see structure. A banner appears on the canvas when
-            that is happening. Trust the readout, inspect in 1:1.
-
+EYE-MATCH   Wall's angular size on your monitor equals the real wall's at the
+            viewer distance. Best for composition and legibility.
 FIT         Whole wall on screen. Watch the "your eye is ~N m from this wall"
-            figure - fitting a 12 m wall onto a monitor is optically the same as
-            standing 25 m back, which is why everything always looks fine here.
+            figure: fitting a 12 m wall on a monitor is optically the same as
+            standing 25 m back, which is why everything looks fine here.
+1:1         One wall millimetre = one real millimetre on your monitor.
+FREE        Anything; the equivalent-distance readout keeps you honest.
 
-1:1         One wall millimetre = one real millimetre on your monitor. The only
-            mode that can honestly show pixel structure. Scroll to zoom
-            (anchored on the cursor), drag to pan, double-click to recentre.
-
-FREE        Anything. The equivalent-distance readout keeps you honest.
+Scroll zooms anchored on the cursor, drag pans, double-click recentres.
 
 
-SCALER SETTING
---------------
-"Good processor" resamples progressively; "cheap processor" uses nearest
-neighbour. If your design only survives the good one, say so in the spec,
-because you do not always get to choose the processor. Note that the filtered
-path uses the browser's own high-quality resampler, which is a hint rather than
-a guaranteed box filter - results can differ slightly outside Chrome.
+SELF-TEST
+---------
+Runs at boot and asserts two things through the real pipeline:
+  - a 50/50 black/white field, fused, lands on sRGB 188 (gamma-space would be
+    128). This single number is the difference between right and confidently
+    wrong.
+  - mean brightness does not move when fill factor changes, measured in the
+    fused regime.
+A red banner appears if either fails. Call SQUINT.selftest() any time.
 
 
-KNOWN SIMPLIFICATIONS (things it does NOT model)
-------------------------------------------------
-Stated plainly, because a measuring instrument that hides its limits is worse
-than one that has none.
+KNOWN SIMPLIFICATIONS (what it still does NOT model)
+----------------------------------------------------
+The list is shorter than it was, and each remaining item is here because it is
+honest to leave it out, not because it was inconvenient.
 
-- Resampling and the acuity blur run in sRGB gamma space, not linear light.
-  Real light mixes linearly, so fused detail is slightly darker here than
-  physics. Affects fine detail near black more than anything else.
-- No bit-depth or PWM model, so low-luminance banding is not shown. A 16-bit
-  smooth vignette that bands on a real panel will look clean here. Test dark
-  ramps on real hardware.
-- No off-axis model. Booth audiences view at 45-60 degrees, where colour and
-  brightness shift (though grid visibility actually improves).
-- Static acuity only. Moving content reads worse than a still frame at the same
-  pitch, so still-frame judgements err on the safe side.
-- No nits, no photometry. The ambient wash is a contrast model, not a measured
-  one - it tells you the shape of the problem, not the number.
-- The pixel gap is not drawn below 3 screen pixels per LED cell. Mean brightness
-  stays correct either way; only the visible structure is affected, and the tool
-  says so on the canvas when it matters.
+- OFF-AXIS uses a typical SMD luminance rolloff. Real panels vary considerably,
+  and geometric foreshortening of the pitch is not modelled - only brightness.
+  Treat the angle control as indicative.
+- CONTRAST SENSITIVITY is not modelled. Acuity is measured at maximum contrast;
+  low-contrast detail needs to be larger than the 1-arcminute figure implies, so
+  the legibility verdict is slightly optimistic for low-contrast content.
+- MOTION. Static acuity only. Moving content reads worse than a still frame at
+  the same pitch, so still-frame judgements err on the safe side.
+- PHOTOMETRY is derived, not measured: nits and lux come from spec sheets and
+  presets, and every derived figure is labelled an estimate. The image transform
+  stays display-relative, because a monitor cannot show 1000 nits.
+- CLIPPING. Zoomed in far enough to resolve individual emitters, a low-fill wall
+  drives its LEDs well above the average luminance (4x at 25% fill), which an
+  SDR monitor cannot display, so bright content clips there. Mean brightness is
+  still exact once the structure fuses.
+- No moire simulation of a camera sensor, no HDR output, no per-panel calibration
+  or seam/tile variation.
 
 
 KEYS
@@ -185,49 +212,44 @@ KEYS
 FILES
 -----
   squint.html        the tool. This is the whole thing.
-  testcard.png       3840x2160 legibility test card
+  testcard.png       3840x2160 test card: legibility ladder, hairlines, stripe
+                     bursts, a 50/50 gamma-fusion patch with 188 and 128
+                     reference blocks, and a 0-40/255 dark ramp for banding
   make-testcard.ps1  regenerates it
   testclip.mp4       4 s moving 4K clip, for checking the video path
+  reviews/           the two independent reviews that shaped this tool
   README.txt         this file
-
-The test card is the fastest sanity check: load it, set your wall and distance,
-and read down the text ladder until the rows stop being legible. That row height
-in source pixels is your floor for that wall at that distance.
 
 
 VERIFICATION STATUS (2026-08-12)
 --------------------------------
-Reviewed by two independent reviewers (a code reviewer and an adversarial model
-auditor) and re-tested after every fix.
+Reviewed twice by an external code reviewer and once by an adversarial model
+auditor, and re-tested after every fix.
 
-Verified against the test card:
-  - native resolution, content scale, eye-resolution, structure verdicts and
-    both distances checked against hand maths on four wall configurations
-    (6x3 @2.9mm, 12x4 @3.9mm, 3x2 @1.5mm, 30x8 @2.6mm) - all correct
-  - the acuity limit is derived from the acuity constant, so the two cannot
-    drift apart
-  - the acuity filter demonstrably removes detail with distance
-  - fill factor from 90% to 25% now holds mean brightness within 3.6%
-  - ambient wash measured: 30% wash on a 14/255 black lifts it to 86/255,
-    matching amb + (1-amb) x in exactly
-  - measure tool agrees with independent maths, including on the B view in A/B
-    mode (which previously reported pitch A's numbers - a 3.4x error)
-  - cursor-anchored zoom drifts 0.6 wall px in 1282 over 14 zoom steps
-  - 17 hostile-input cases (zero/negative/text/absurd walls and pitches,
-    extreme zoom and pan, fill and ambient extremes) throw nothing, produce no
-    NaN or Infinity readouts, and no longer hang the renderer
-  - simulate / wipe / A-B modes all render; PNG export produces a correctly
-    named file with the viewing contract stamped on it
+Measured, not asserted:
+  - linear-light fusion: 50/50 field reads 186.9 against a 187.3 reference
+    (the pre-rewrite build read 131 against the same reference)
+  - fill factor 90% -> 25% moves mean brightness by 1.5% in the fused regime
+  - bit depth: the dark ramp holds 40 levels at full drive and 9 at 20% drive,
+    matching 256 x 0.2 levels across the ramp's signal span
+  - photometry: 400 lux at 4% reflectance against 1000 nits gives 5.1 reflected
+    nits and 197:1 on-site contrast, by hand and on screen
+  - scale figure measures 1.75/3 of the wall's on-screen height
+  - measure tool agrees with independent maths, including on the B view
+  - native resolution, content scale, eye resolution, both structure distances
+    checked against hand maths on four wall configurations
+  - 20 hostile-input cases (zero/negative/text/absurd walls and pitches, extreme
+    zoom and pan, fill, ambient, bit depth, drive and angle extremes) throw
+    nothing and produce no NaN or Infinity readouts
+  - simulate / wipe / A-B modes render; PNG export names and captions correctly
 
 NOT verified: the video path (load, play, scrub). It could not be tested from an
-automated session because Chrome refuses to load media in a backgrounded tab.
-The code path is the same pipeline as stills and the lifecycle bugs found in it
-have been fixed, but that is an argument, not a test. Drag testclip.mp4 in and
-press Play to confirm - it is a five-second check.
+automated session because Chrome will not load media in a backgrounded tab. Drag
+testclip.mp4 in and press Play to confirm - it is a five-second check.
 
 
 SCRIPTING HANDLE
 ----------------
 window.SQUINT exposes { S, nativeRes, contentRect, cellPx, draw, ppmmDev,
-viewUnder, geo, geoB, HAS_FILTER, ARCMIN_RAD, MM_PER_M } from the console, if
-you ever want to drive it or batch out comparisons.
+viewUnder, geo, geoB, GLE, selftest, ambientFraction, contrastRatio,
+offAxisGain, ARCMIN_RAD, MM_PER_M } from the console.
