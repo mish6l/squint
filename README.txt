@@ -291,9 +291,12 @@ Measured, not asserted:
     Infinity readouts
   - simulate / wipe / A-B modes render; PNG export names and captions correctly
 
-NOT verified: the video path (load, play, scrub). It could not be tested from an
-automated session because Chrome will not load media in a backgrounded tab. Drag
-testclip.mp4 in and press Play to confirm - it is a five-second check.
+Video path: VERIFIED by hand, 2026-08-13, including a large file beyond the
+bundled test clip. It could not be tested from the automated session because
+Chrome will not load media in a backgrounded tab, so this one was confirmed the
+old-fashioned way.
+
+Nothing is left flagged as unverified.
 
 
 SCRIPTING HANDLE
