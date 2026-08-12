@@ -227,9 +227,12 @@ Reviewed twice by an external code reviewer and once by an adversarial model
 auditor, and re-tested after every fix.
 
 Measured, not asserted:
-  - linear-light fusion: 50/50 field reads 186.9 against a 187.3 reference
-    (the pre-rewrite build read 131 against the same reference)
-  - fill factor 90% -> 25% moves mean brightness by 1.5% in the fused regime
+  - linear-light fusion: the 50/50 field fuses to 185.6 against a reference
+    block the pipeline reproduces as exactly 188.0, with the gamma reference
+    reproduced as exactly 128.0. The pre-rewrite canvas-2D build read 131.
+  - the "cheap processor" scaler genuinely point-samples: local range 247 in a
+    1 px stripe field, against 7 for the box filter
+  - fill factor 90% -> 25% moves mean brightness by 0.1% in the fused regime
   - bit depth: the dark ramp holds 40 levels at full drive and 9 at 20% drive,
     matching 256 x 0.2 levels across the ramp's signal span
   - photometry: 400 lux at 4% reflectance against 1000 nits gives 5.1 reflected
@@ -238,9 +241,10 @@ Measured, not asserted:
   - measure tool agrees with independent maths, including on the B view
   - native resolution, content scale, eye resolution, both structure distances
     checked against hand maths on four wall configurations
-  - 20 hostile-input cases (zero/negative/text/absurd walls and pitches, extreme
-    zoom and pan, fill, ambient, bit depth, drive and angle extremes) throw
-    nothing and produce no NaN or Infinity readouts
+  - 27 hostile-input cases (zero/negative/text/absurd walls and pitches, extreme
+    aspect ratios, odd native sizes, extreme zoom and pan, fill, ambient, bit
+    depth, drive, angle and scaler extremes) throw nothing and produce no NaN or
+    Infinity readouts
   - simulate / wipe / A-B modes render; PNG export names and captions correctly
 
 NOT verified: the video path (load, play, scrub). It could not be tested from an

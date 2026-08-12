@@ -453,28 +453,46 @@ const GLE = (()=>{
   const F = s => `#version 300 es\nprecision highp float;\nprecision highp sampler2D;\n`+SRGB+`
     uniform sampler2D uTex; in vec2 vUV; out vec4 oCol;\n`+s;
 
-  // exact 2x2 average -- the chain step
-  const FS_HALVE = F(`uniform vec2 uSrc, uDst;
-    void main(){ vec2 d=floor(vUV*uDst)*2.0+0.5; vec2 t=1.0/uSrc;
-      oCol=vec4(0.25*( texture(uTex,d*t).rgb + texture(uTex,(d+vec2(1,0))*t).rgb
-                     + texture(uTex,(d+vec2(0,1))*t).rgb + texture(uTex,(d+vec2(1,1))*t).rgb ),1.0); }`);
-
-  // exact area-weighted box for any ratio up to 8 -- deterministic in every
-  // browser, unlike imageSmoothingQuality which is only a hint
-  const FS_BOX = F(`uniform vec2 uSrc, uDst; uniform int uNearest;
+  // Exact separable area reduction along ONE axis, for any ratio up to 64x.
+  // Every source texel contributes its true overlap weight, so odd sizes and
+  // non-integer ratios are handled correctly -- a 2x2-averaging chain silently
+  // drops the last row of an odd dimension, and a chain that stops when either
+  // axis is within 2x leaves the other axis undersampled.
+  const FS_REDUCE = F(`uniform vec2 uSrc, uDst; uniform int uAxis, uNearest;
     void main(){
-      if(uNearest==1){ oCol=vec4(texture(uTex,vUV).rgb,1.0); return; }
-      vec2 ratio=uSrc/uDst; vec2 d=floor(vUV*uDst);
-      vec2 s0=d*ratio, s1=(d+1.0)*ratio;
+      vec2 d=floor(vUV*uDst);
+      if(uNearest==1){
+        // A cheap processor point-samples. texelFetch bypasses the sampler's
+        // LINEAR filter, which texture() would otherwise apply.
+        ivec2 p=ivec2(floor((d+0.5)*(uSrc/uDst)));
+        p=clamp(p,ivec2(0),ivec2(uSrc)-ivec2(1));
+        oCol=vec4(texelFetch(uTex,p,0).rgb,1.0); return; }
       vec3 acc=vec3(0.0); float wsum=0.0;
-      for(int j=0;j<8;j++){
-        float y=floor(s0.y)+float(j); if(y>=s1.y) break;
-        float wy=min(y+1.0,s1.y)-max(y,s0.y); if(wy<=0.0) continue;
-        for(int i=0;i<8;i++){
-          float x=floor(s0.x)+float(i); if(x>=s1.x) break;
-          float wx=min(x+1.0,s1.x)-max(x,s0.x); if(wx<=0.0) continue;
-          acc+=texture(uTex,(vec2(x,y)+0.5)/uSrc).rgb*(wx*wy); wsum+=wx*wy; } }
+      if(uAxis==0){
+        float r=uSrc.x/uDst.x, s0=d.x*r, s1=(d.x+1.0)*r;
+        float y=(d.y+0.5)/uSrc.y;
+        for(int i=0;i<64;i++){
+          float x=floor(s0)+float(i); if(x>=s1) break;
+          float w=min(x+1.0,s1)-max(x,s0); if(w<=0.0) continue;
+          acc+=texture(uTex,vec2((x+0.5)/uSrc.x,y)).rgb*w; wsum+=w; }
+      } else {
+        float r=uSrc.y/uDst.y, s0=d.y*r, s1=(d.y+1.0)*r;
+        float x=(d.x+0.5)/uSrc.x;
+        for(int i=0;i<64;i++){
+          float y=floor(s0)+float(i); if(y>=s1) break;
+          float w=min(y+1.0,s1)-max(y,s0); if(w<=0.0) continue;
+          acc+=texture(uTex,vec2(x,(y+0.5)/uSrc.y)).rgb*w; wsum+=w; }
+      }
       oCol=vec4(acc/max(wsum,1e-6),1.0); }`);
+
+  // plain resize for magnification (wall out-resolves the content)
+  const FS_COPY = F(`uniform int uNearest; uniform vec2 uSrc, uDst;
+    void main(){
+      if(uNearest==1){
+        ivec2 p=ivec2(floor((floor(vUV*uDst)+0.5)*(uSrc/uDst)));
+        p=clamp(p,ivec2(0),ivec2(uSrc)-ivec2(1));
+        oCol=vec4(texelFetch(uTex,p,0).rgb,1.0); return; }
+      oCol=vec4(texture(uTex,vUV).rgb,1.0); }`);
 
   // place the resampled content into the LED crop, black outside the content
   const FS_PLACE = F(`uniform vec2 uLedSize, uCropOrigin; uniform float uDecim;
@@ -560,7 +578,7 @@ const GLE = (()=>{
 
   if(ok){
     try{
-      P={halve:prog(FS_HALVE), box:prog(FS_BOX), place:prog(FS_PLACE), quant:prog(FS_QUANT),
+      P={reduce:prog(FS_REDUCE), copy:prog(FS_COPY), place:prog(FS_PLACE), quant:prog(FS_QUANT),
          comp:prog(FS_COMP), blur:prog(FS_BLUR), present:prog(FS_PRESENT)};
       quadVAO=gl.createVertexArray(); gl.bindVertexArray(quadVAO);
       const b=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,b);
@@ -589,9 +607,19 @@ const GLE = (()=>{
     const e=tex(w,h,nearest); e.n=!!nearest; e.fb=gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER,e.fb);
     gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,e.t,0);
+    // Rendering into an incomplete framebuffer fails silently, which for this
+    // tool means confidently wrong pixels rather than a visible error.
+    const st=gl.checkFramebufferStatus(gl.FRAMEBUFFER);
     gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+    if(st!==gl.FRAMEBUFFER_COMPLETE){
+      gl.deleteFramebuffer(e.fb); gl.deleteTexture(e.t);
+      throw new Error('framebuffer incomplete (0x'+st.toString(16)+') at '+w+'x'+h);
+    }
     return e; }
-  function give(e){ if(e&&pool.length<24) pool.push(e); }
+  // Discarding a full pool without deleting would grow GPU memory every frame.
+  function give(e){ if(!e) return;
+    if(pool.length<24){ pool.push(e); return; }
+    gl.deleteFramebuffer(e.fb); gl.deleteTexture(e.t); }
 
   function pass(pr, inTex, out, setu){
     gl.useProgram(pr.p); gl.bindVertexArray(quadVAO);
@@ -607,6 +635,7 @@ const GLE = (()=>{
 
   // source frame -> linear texture (sRGB internal format does the decode)
   let srcTex=null, srcKey='';
+  function invalidateSource(){ srcKey=''; }
   function uploadSource(img,w,h,key){
     if(!srcTex){ srcTex=gl.createTexture(); }
     if(srcKey===key && key) return srcTex;
@@ -620,27 +649,48 @@ const GLE = (()=>{
     srcKey=key||'';
     return srcTex; }
 
-  // exact box downsample: halve until within 2x, then one area-weighted pass
+  // Exact box downsample, one axis at a time. Each step reduces an axis by at
+  // most 64x with true area weights, so odd dimensions and non-integer ratios
+  // are exact, and the two axes are reduced independently (an extreme aspect
+  // ratio cannot leave one axis undersampled).
   function boxTo(inTex, sw, sh, dw, dh, nearest){
     dw=Math.max(1,Math.round(dw)); dh=Math.max(1,Math.round(dh));
     let cur=inTex, cw=sw, ch=sh, owned=null;
+    const step=(nw,nh,axis)=>{
+      const out=grab(nw,nh,false);
+      const scw=cw, sch=ch;
+      pass(P.reduce,cur,out,u=>{ gl.uniform2f(u.uSrc,scw,sch); gl.uniform2f(u.uDst,nw,nh);
+                                 gl.uniform1i(u.uAxis,axis); gl.uniform1i(u.uNearest,0); });
+      give(owned); owned=out; cur=out.t; cw=nw; ch=nh;
+    };
     if(!nearest){
-      while(cw>dw*2 && ch>dh*2){
-        const nw=Math.max(dw,Math.floor(cw/2)), nh=Math.max(dh,Math.floor(ch/2));
-        if(nw===cw&&nh===ch) break;
-        const out=grab(nw,nh,false);
-        pass(P.halve,cur,out,u=>{ gl.uniform2f(u.uSrc,cw,ch); gl.uniform2f(u.uDst,nw,nh); });
-        give(owned); owned=out; cur=out.t; cw=out.w; ch=out.h;
-      }
+      while(cw>dw) step(Math.max(dw,Math.ceil(cw/64)), ch, 0);
+      while(ch>dh) step(cw, Math.max(dh,Math.ceil(ch/64)), 1);
     }
+    // final resize: magnification, or the nearest-neighbour "cheap processor"
     const out=grab(dw,dh,true);
     const fcw=cw, fch=ch;
-    pass(P.box,cur,out,u=>{ gl.uniform2f(u.uSrc,fcw,fch); gl.uniform2f(u.uDst,out.w,out.h);
-                            gl.uniform1i(u.uNearest,nearest?1:0); });
+    pass(P.copy,cur,out,u=>{ gl.uniform2f(u.uSrc,fcw,fch); gl.uniform2f(u.uDst,dw,dh);
+                             gl.uniform1i(u.uNearest,nearest?1:0); });
     give(owned);
     return out; }
 
+  // Context loss invalidates every program, texture and framebuffer. Carrying
+  // on would render stale or black pixels while still claiming to simulate.
+  let lost=false;
+  if(live){
+    cv.addEventListener('webglcontextlost',e=>{ e.preventDefault(); lost=true;
+      const d=document.getElementById('drop');
+      if(d){ d.classList.remove('hide');
+        d.innerHTML='<h2 style="color:var(--bad)">GPU context lost</h2>'+
+          '<p>The graphics context was reset, so every buffer holding the '+
+          'simulation is gone. Reload the page to rebuild it. SQUINT will not '+
+          'keep drawing pixels it can no longer vouch for.</p>'; }
+    },false);
+  }
+
   return {cv, gl, live, fail, MAXTEX, P, pass, grab, give, boxTo, uploadSource,
+          invalidateSource, get lost(){return lost;},
           get width(){return cv.width;}, get height(){return cv.height;},
           size(w,h){ if(cv.width!==w) cv.width=w; if(cv.height!==h) cv.height=h; }};
 })();
@@ -653,8 +703,11 @@ const GLE = (()=>{
    implies is quotable in the integrator's own language. */
 function ambientFraction(){
   if(S.ambMode==='manual') return S.ambient;
+  // No low ceiling here: if the photometry says the room defeats the wall, the
+  // readout should say so rather than quietly bottoming out at a flattering
+  // contrast ratio. The bound only exists to keep the shader finite.
   const reflected = S.lux*S.reflect/Math.PI;
-  return clamp(reflected/Math.max(1,S.nits), 0, 4);
+  return clamp(reflected/Math.max(1,S.nits), 0, 1e4);
 }
 function contrastRatio(){ const a=ambientFraction(); return a<=1e-6 ? Infinity : (1+a)/a; }
 
@@ -743,7 +796,9 @@ function renderView(cv, off, pitch, ideal, dims){
       const cw=Math.max(1,x1-x0), ch=Math.max(1,y1-y0);
       const capTex=Math.min(CROP_CAP,GLE.MAXTEX);
       decim=Math.max(1,Math.ceil(Math.max(cw,ch)/capTex));
-      const lw=Math.max(1,Math.round(cw/decim)), lh=Math.max(1,Math.round(ch/decim));
+      // ceil, so a crop that is not a multiple of decim still has a texel
+      // covering its final partial group instead of sampling past the crop
+      const lw=Math.max(1,Math.ceil(cw/decim)), lh=Math.max(1,Math.ceil(ch/decim));
 
       // 1. exact area-average of the source down to LED density
       const content=GLE.boxTo(srcT,S.srcW,S.srcH,
@@ -760,7 +815,10 @@ function renderView(cv, off, pitch, ideal, dims){
       GLE.give(content);
       // 3. bit depth / PWM quantisation, in the signal domain
       if(S.bits<16){
-        const levels=Math.max(1,Math.pow(2,S.bits)*Math.max(0.02,S.wallBright)-1);
+        // An integer maximum code, not a fractional one: a real chain has a
+        // whole number of steps, and 2^bits*drive-1 is fractional for most
+        // drive levels (8-bit at 20% gave 50.2).
+        const levels=Math.max(1,Math.floor((Math.pow(2,S.bits)-1)*Math.max(0.02,S.wallBright)));
         const q=GLE.grab(lw,lh,true);
         GLE.pass(GLE.P.quant, led.t, q, u=>gl.uniform1f(u.uLevels,levels));
         GLE.give(led); led=q;
@@ -788,8 +846,11 @@ function renderView(cv, off, pitch, ideal, dims){
     if(S.blur && sAdd>=0.35){
       let sig=sAdd, sw=VW, sh=VH, work=scene, shrunk=null;
       if(sig>8){
-        const kf=Math.min(16,Math.ceil(sig/8));
-        sw=Math.max(1,Math.round(VW/kf)); sh=Math.max(1,Math.round(VH/kf));
+        // Shrink by whatever factor the sigma actually demands, bounded only by
+        // keeping a usable image. Capping the factor left very large sigmas
+        // under-blurred, because the kernel radius is capped too.
+        const kf=Math.max(1,Math.min(Math.floor(Math.min(VW,VH)/8), Math.ceil(sig/8)));
+        sw=Math.max(8,Math.round(VW/kf)); sh=Math.max(8,Math.round(VH/kf));
         shrunk=GLE.boxTo(scene.t,VW,VH,sw,sh,false);
         work=shrunk; sig=sig/kf;
       }
@@ -880,6 +941,7 @@ function viewUnder(clientX){
   return {cv:$('cvA'), geo:geoA, pitch:S.pitchA, tag:'A'};
 }
 function draw(){
+  if(!GLE.live || GLE.lost) return;      // refusal mode renders nothing at all
   const wipe = S.mode==='wipe', ab = S.mode==='ab';
   $('wrapB').style.display = ab?'block':'none';
   $('wipeBar').style.display = wipe?'block':'none';
@@ -1123,7 +1185,11 @@ function loadFile(f){
   try{ vid.pause(); }catch(e){}
   S.name=f.name;
   const url=URL.createObjectURL(f);
-  const release=()=>{ if(currentUrl && currentUrl!==url) URL.revokeObjectURL(currentUrl); currentUrl=url; };
+  // A superseded or failed load must release its own URL, or every abandoned
+  // load leaks one for the lifetime of the page.
+  const drop=()=>{ try{ URL.revokeObjectURL(url); }catch(e){} };
+  const release=()=>{ if(currentUrl && currentUrl!==url) URL.revokeObjectURL(currentUrl); currentUrl=url;
+                      GLE.invalidateSource(); };
   // File.type is empty for some dragged/local files; fall back to extension.
   const ext=(f.name.split('.').pop()||'').toLowerCase();
   const isVid = f.type ? f.type.startsWith('video')
@@ -1132,9 +1198,9 @@ function loadFile(f){
     vid.src=url;
     vid.load();
     vid.onloadedmetadata=()=>{
-      if(myToken!==loadToken) return;                       // superseded
-      if(!(vid.videoWidth>0 && vid.videoHeight>0)){         // no usable video track
-        toast('That file has no usable video track'); return;
+      if(myToken!==loadToken){ drop(); return; }             // superseded
+      if(!(vid.videoWidth>0 && vid.videoHeight>0)){          // no usable video track
+        toast('That file has no usable video track'); drop(); return;
       }
       release();
       S.src=vid; S.srcW=vid.videoWidth; S.srcH=vid.videoHeight; S.isVideo=true;
@@ -1143,17 +1209,17 @@ function loadFile(f){
       $('drop').classList.add('hide');
       vid.currentTime=Math.min(.1,(vid.duration||1)/2); draw();
     };
-    vid.onerror=()=>{ if(myToken===loadToken) toast('Could not decode that video'); };
+    vid.onerror=()=>{ if(myToken===loadToken) toast('Could not decode that video'); drop(); };
   } else {
     const img=new Image();
     img.onload=()=>{
-      if(myToken!==loadToken) return;
+      if(myToken!==loadToken){ drop(); return; }
       release();
       S.src=img; S.srcW=img.naturalWidth; S.srcH=img.naturalHeight; S.isVideo=false;
       $('vidCtl').style.display='none'; $('seekRow').style.display='none';
       $('drop').classList.add('hide'); draw();
     };
-    img.onerror=()=>{ if(myToken===loadToken) toast('Could not decode that image'); };
+    img.onerror=()=>{ if(myToken===loadToken) toast('Could not decode that image'); drop(); };
     img.src=url;
   }
 }
@@ -1265,8 +1331,13 @@ function exportPng(btn){
   // relying on their eye to supply the difference, and stamp the geometry the
   // image is only true at. Without this the PNG flatters the wall, because a
   // deck slide is almost always viewed smaller than eye-match scale.
-  const wasAbs=S.absBlur; S.absBlur=true; draw();
-
+  const wasAbs=S.absBlur;
+  try{ S.absBlur=true; draw(); composeExport(btn); }
+  finally{ S.absBlur=wasAbs; draw();
+           if(btn.disabled && btn.textContent==='Encoding…'){
+             btn.textContent='Save comparison PNG'; btn.disabled=false; } }
+}
+function composeExport(btn){
   const a=$('cvA'), ab=S.mode==='ab';
   const b=$('cvB');
   const W=ab?a.width+b.width+8:a.width, H=a.height+124;
@@ -1303,8 +1374,6 @@ function exportPng(btn){
              ` · contrast ≈ ${cr===Infinity?'∞':Math.round(cr)}:1 · ${S.offAxis}° off-axis`+
              ` · linear-light GPU render · audience acuity baked in`, 120, a.height+110);
 
-  S.absBlur=wasAbs; draw();
-
   const restore=()=>{ btn.textContent='Save comparison PNG'; btn.disabled=false; };
   if(!out.toBlob){ restore(); return toast('This browser cannot export PNG'); }
   try{
@@ -1335,11 +1404,15 @@ window.SQUINT = { S, nativeRes, contentRect, cellPx, draw, ppmmDev, viewUnder,
    whole tool exists to argue against. */
 function selftest(quiet){
   if(!GLE.live) return null;
+  // Snapshot EVERY field the test touches. Missing one (fitMode) left the
+  // user's content silently stretched while the UI still read "Fit".
   const keep={src:S.src,srcW:S.srcW,srcH:S.srcH,isVideo:S.isVideo,name:S.name,
     wallW:S.wallW,wallH:S.wallH,pitchA:S.pitchA,fill:S.fill,bits:S.bits,
     zoomMode:S.zoomMode,zoomFree:S.zoomFree,dist:S.dist,ambMode:S.ambMode,
     ambient:S.ambient,offAxis:S.offAxis,figure:S.figure,mode:S.mode,
-    panX:S.panX,panY:S.panY,grid:S.grid,blur:S.blur,wallBright:S.wallBright};
+    panX:S.panX,panY:S.panY,grid:S.grid,blur:S.blur,wallBright:S.wallBright,
+    fitMode:S.fitMode,absBlur:S.absBlur,scaler:S.scaler,pitchB:S.pitchB,
+    nits:S.nits,lux:S.lux,reflect:S.reflect};
   const res={pass:true,checks:[]};
   try{
     const N=64, cvT=document.createElement('canvas'); cvT.width=N; cvT.height=N;
