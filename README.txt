@@ -22,7 +22,7 @@ below.
 If your browser blocks local canvas readback under file://, only the PNG export
 is affected. Serve the folder instead:
 
-    cd "D:\Mishal\Claude Code\SQUINT"
+    cd <the folder containing squint.html>
     python -m http.server 8731
     then open  http://127.0.0.1:8731/squint.html
 
