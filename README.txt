@@ -1,5 +1,6 @@
 SQUINT - LED pitch and visual-acuity simulator
 ==============================================
+Built by Mish - instagram.com/mish6l
 
 WHAT IT IS
 ----------

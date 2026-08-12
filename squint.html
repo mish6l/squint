@@ -47,11 +47,16 @@ button,input,select{font:inherit;color:inherit}
 }
 #calModal .row{max-width:620px}
 #brand{
-  padding:14px 16px 12px;border-bottom:1px solid var(--line);
-  display:flex;align-items:baseline;gap:9px;
+  padding:14px 16px 11px;border-bottom:1px solid var(--line);
+  display:flex;flex-direction:column;align-items:flex-start;gap:5px;
 }
+#brandRow{display:flex;align-items:baseline;gap:9px}
 #brand b{font-size:19px;letter-spacing:.22em;font-weight:600}
-#brand span{font-size:10px;color:var(--dim2);letter-spacing:.09em;text-transform:uppercase}
+#brandRow span{font-size:10px;color:var(--dim2);letter-spacing:.09em;text-transform:uppercase}
+#credit{font-size:10.5px;color:var(--dim2);letter-spacing:.02em}
+#credit b{font-size:10.5px;letter-spacing:0;color:var(--dim);font-weight:600}
+#credit a{color:var(--acc);text-decoration:none}
+#credit a:hover{text-decoration:underline}
 #railScroll{overflow-y:auto;flex:1;padding-bottom:20px}
 #railScroll::-webkit-scrollbar{width:9px}
 #railScroll::-webkit-scrollbar-thumb{background:#2b313a;border-radius:5px}
@@ -175,7 +180,10 @@ video{position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-e
 
 <div id="rail">
   <div id="railGrip" title="Drag to widen the sidebar"></div>
-  <div id="brand"><b>SQUINT</b><span>LED pitch &amp; acuity</span></div>
+  <div id="brand">
+    <div id="brandRow"><b>SQUINT</b><span>LED pitch &amp; acuity</span></div>
+    <div id="credit">Built by <b>Mish</b> · <a href="https://instagram.com/mish6l" target="_blank" rel="noopener noreferrer">@mish6l</a></div>
+  </div>
   <div id="railScroll">
 
     <div class="sec" data-k="wall">
@@ -513,6 +521,9 @@ function cab(){
   return {mm:c.mm, px:c.px, tall:c.tall||1, ar:c.ar||1, n:c.n};
 }
 function cabPitch(){ const c=cab(); return c.mm/Math.max(1,c.px); }
+// A derived pitch is a long float (500/192 = 2.6041666...). Never print it raw:
+// it lands on labels, filenames and the client-facing caption strip.
+function fmtPitch(p){ return (+p).toFixed(3).replace(/0+$/,'').replace(/\.$/,''); }
 // Cabinet height in pixels: square pixels, so it follows the physical aspect.
 function cabPxY(){ const c=cab(); return Math.max(1,Math.round(c.px*c.ar*c.tall)); }
 function cabMMY(){ const c=cab(); return c.mm*c.ar*c.tall; }
@@ -1194,8 +1205,8 @@ function draw(){
   if(ab){
     geoB = renderView($('cvB'), offB, S.pitchB, false);
     const a=nativeRes(S.pitchA), b=nativeRes(S.pitchB);
-    $('labA').textContent = `A · ${S.pitchA} mm · ${a.nx}×${a.ny}`;
-    $('labB').textContent = `B · ${S.pitchB} mm · ${b.nx}×${b.ny}`;
+    $('labA').textContent = `A · ${fmtPitch(S.pitchA)} mm · ${a.nx}×${a.ny}`;
+    $('labB').textContent = `B · ${fmtPitch(S.pitchB)} mm · ${b.nx}×${b.ny}`;
   } else if(wipe){
     // Left of the bar = the ideal source; right = the real wall (already in cvA).
     const cv=$('cvA');
@@ -1206,10 +1217,10 @@ function draw(){
     c.drawImage(idealCv,0,0); c.restore();
     $('wipeBar').style.left = (S.wipe*100)+'%';
     const a=nativeRes(S.pitchA);
-    $('labA').textContent = `SOURCE ${S.srcW}×${S.srcH}   |   WALL ${S.pitchA} mm · ${a.nx}×${a.ny}`;
+    $('labA').textContent = `SOURCE ${S.srcW}×${S.srcH}   |   WALL ${fmtPitch(S.pitchA)} mm · ${a.nx}×${a.ny}`;
   } else {
     const a=nativeRes(S.pitchA);
-    $('labA').textContent = `${S.pitchA} mm · ${a.nx}×${a.ny} · ${S.dist.toFixed(1)} m`;
+    $('labA').textContent = `${fmtPitch(S.pitchA)} mm · ${a.nx}×${a.ny} · ${S.dist.toFixed(1)} m`;
   }
   updateReadout();
 }
@@ -1277,8 +1288,8 @@ function updateReadout(){
 
   $('distHint').innerHTML =
     `At <b>${S.dist.toFixed(1)} m</b> the eye resolves <b>${r_mm.toFixed(2)} mm</b>. ` +
-    (ratio>=1 ? `Your ${S.pitchA} mm pitch is <b>coarser</b> than that — pixels are individually visible.`
-              : `Your ${S.pitchA} mm pitch is <b>finer</b> than that — the grid fuses.`) +
+    (ratio>=1 ? `Your ${fmtPitch(S.pitchA)} mm pitch is <b>coarser</b> than that — pixels are individually visible.`
+              : `Your ${fmtPitch(S.pitchA)} mm pitch is <b>finer</b> than that — the grid fuses.`) +
     `<br>Acuity limit <b>${retina.toFixed(1)} m</b> (3.44 × pitch); conservatively structure-free from <b>${safe.toFixed(1)} m</b>, since a repeating grid stays detectable past the limit for a single feature. Common "1 m per mm" rule: ${S.pitchA.toFixed(1)} m (aggressive minimum).`;
 
   // On-screen scale vs. real size, and the distance your own eye is effectively at.
@@ -1321,7 +1332,7 @@ function measureReport(wpx,hpx,pitch,tag){
   const worst = (vPx==='no'||vAn==='no')?'no':(vPx==='mid'||vAn==='mid')?'mid':'ok';
   const word = worst==='ok'?'READS COMFORTABLY':worst==='mid'?'MARGINAL — risky':'WILL NOT READ';
   $('measOut').innerHTML =
-    (tag==='B' ? `<span class="acc">view B · ${pitch} mm</span><br>` : '')+
+    (tag==='B' ? `<span class="acc">view B · ${fmtPitch(pitch)} mm</span><br>` : '')+
     `height <b>${hpx.toFixed(1)}</b> wall px &nbsp; <span class="${vPx}">${vPx==='ok'?'ok':vPx==='mid'?'thin':'too few'}</span><br>`+
     `physical <b>${mm.toFixed(0)} mm</b> (${(mm/10).toFixed(1)} cm)<br>`+
     `angular <b>${angMin.toFixed(1)}′</b> at ${S.dist.toFixed(1)} m &nbsp; <span class="${vAn}">${vAn==='ok'?'ok':vAn==='mid'?'small':'below acuity'}</span><br>`+
@@ -1672,8 +1683,8 @@ function composeExport(btn){
   c.font='15px Consolas, monospace'; c.fillStyle='#e8ebef';
   const l1 = `${S.wallW} × ${S.wallH} m wall   ·   viewer at ${S.dist.toFixed(1)} m   ·   ${S.name}`;
   const l2 = ab
-    ? `A: ${S.pitchA} mm → ${nx}×${ny}      B: ${S.pitchB} mm → ${nativeRes(S.pitchB).nx}×${nativeRes(S.pitchB).ny}      eye resolves ${(MM_PER_M*S.dist).toFixed(2)} mm`
-    : `${S.pitchA} mm pitch → ${nx} × ${ny} native   ·   eye resolves ${(MM_PER_M*S.dist).toFixed(2)} mm   ·   acuity limit ${(S.pitchA/MM_PER_M).toFixed(1)} m`;
+    ? `A: ${fmtPitch(S.pitchA)} mm → ${nx}×${ny}      B: ${fmtPitch(S.pitchB)} mm → ${nativeRes(S.pitchB).nx}×${nativeRes(S.pitchB).ny}      eye resolves ${(MM_PER_M*S.dist).toFixed(2)} mm`
+    : `${fmtPitch(S.pitchA)} mm pitch → ${nx} × ${ny} native   ·   eye resolves ${(MM_PER_M*S.dist).toFixed(2)} mm   ·   acuity limit ${(S.pitchA/MM_PER_M).toFixed(1)} m`;
   c.fillText(l1, 120, a.height+30);
   c.fillStyle='#8b939e'; c.fillText(l2, 120, a.height+58);
 
@@ -1700,7 +1711,7 @@ function composeExport(btn){
       restore();
       if(!bl) return toast('Export failed — canvas too large');
       const u=URL.createObjectURL(bl), link=document.createElement('a');
-      link.href=u; link.download=`SQUINT_${S.pitchA}mm_${S.dist.toFixed(0)}m.png`;
+      link.href=u; link.download=`SQUINT_${fmtPitch(S.pitchA)}mm_${S.dist.toFixed(0)}m.png`;
       link.click(); setTimeout(()=>URL.revokeObjectURL(u),4000);
       toast('PNG saved');
     },'image/png');
