@@ -116,7 +116,6 @@ refresh, scan banding, sensor moiré; geometric foreshortening off-axis
 | `testcard.png` | 3840×2160 test card: legibility ladder, hairlines, stripe bursts, gamma-fusion patch with references, dark ramp |
 | `make-testcard.ps1` | regenerates it |
 | `reviews/` | the reviews that shaped the tool |
-| `SQUINT-briefing.md` | architecture, invariants and traps, for anyone picking up the code |
 
 ## Licence
 
