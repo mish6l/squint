@@ -556,6 +556,15 @@ function screenRes(pitch){
 }
 // Gap between screens, in wall pixels (the gap shows nothing at all).
 function gapPx(pitch){ return S.arrayOn ? Math.max(0,Math.round(S.arrayGap*1000/pitch)) : 0; }
+// How many metres of room the whole installation occupies, gaps included.
+// EVERY angular claim has to be made against this and not against S.wallW:
+// three 6 m screens on 1.5 m gaps span 21 m, so a viewer at 5 m sees 129deg of
+// wall, not the 62deg one screen subtends. The export's viewing contract runs
+// off the same number, which is the one place being wrong reaches a client.
+function spanW(){
+  const n=S.arrayOn?Math.max(2,S.arrayN|0):1;
+  return S.wallW*n + (n>1?S.arrayGap*(n-1):0);
+}
 // The canvas the content is mapped across: for an array that spans every screen
 // AND the gaps between them, because a designer lays out one image over the lot.
 function nativeRes(pitch){
@@ -908,15 +917,35 @@ const GLE = (()=>{
    The image transform stays display-relative -- a monitor cannot show 1000
    nits and the tool must not pretend otherwise -- but the contrast ratio it
    implies is quotable in the integrator's own language. */
+// Peak white the wall is ACTUALLY putting out. Driving a wall down costs
+// greyscale (the quantiser already knew that) and ambient headroom (it did
+// not): the reflected wash is fixed by the room, so halving the drive doubles
+// the wash relative to white. Measuring ambient against the panel's spec sheet
+// instead of its drive level flattered every dimmed wall by exactly 1/drive.
+function effectiveNits(){ return S.nits*Math.max(0.02,S.wallBright); }
 function ambientFraction(){
-  if(S.ambMode==='manual') return S.ambient;
+  if(S.ambMode==='manual') return S.ambient;   // an explicit ratio, already relative to white
   // No low ceiling here: if the photometry says the room defeats the wall, the
   // readout should say so rather than quietly bottoming out at a flattering
   // contrast ratio. The bound only exists to keep the shader finite.
   const reflected = S.lux*S.reflect/Math.PI;
-  return clamp(reflected/Math.max(1,S.nits), 0, 1e4);
+  return clamp(reflected/Math.max(1,effectiveNits()), 0, 1e4);
 }
-function contrastRatio(){ const a=ambientFraction(); return a<=1e-6 ? Infinity : (1+a)/a; }
+/* The shader emits white at offAxisGain() and then adds an ambient wash that
+   does NOT roll off with angle, so the contrast the picture shows is
+   (gain + amb)/amb. Quoting the on-axis (1 + amb)/amb beside a 60deg label put
+   a number ~2.5x better than the image directly above it. */
+function contrastRatio(){
+  const a=ambientFraction(), g=offAxisGain();
+  if(a<=1e-6) return g<=1e-6 ? 1 : Infinity;
+  return (g+a)/a;
+}
+// Black level as a fraction of the white actually emitted at this angle.
+// Reduces to amb/(1+amb) on axis, which is what it always was.
+function blackFraction(){
+  const a=ambientFraction(), g=offAxisGain();
+  return a<=0 ? 0 : a/Math.max(1e-6,g+a);
+}
 
 /* ================= view scale ================= */
 function ppmmDev(){ return S.ppmmCss*(window.devicePixelRatio||1); }
@@ -930,9 +959,7 @@ function figMargin(){
   // Measure against the WHOLE span, gaps included — an array is much wider than
   // one screen, so sizing the margin from a single screen over-reserves and
   // pushes the far end of the wall off the viewport.
-  const n=S.arrayOn?Math.max(2,S.arrayN|0):1;
-  const spanM=S.wallW*n + (n>1?S.arrayGap*(n-1):0);
-  return Math.min(0.34, 1.55*0.28*1.75/Math.max(0.5,spanM));
+  return Math.min(0.34, 1.55*0.28*1.75/Math.max(0.5,spanW()));
 }
 // Screen device-px per wall pixel.
 function cellPx(pitch, VW, VH){
@@ -1019,11 +1046,18 @@ function renderView(cv, off, pitch, ideal, dims){
       //    With a processor in the chain the content goes through ITS grid
       //    first, so a feed smaller than the wall caps the detail that can ever
       //    reach the panels -- the wall is then upscaled from that ceiling.
+      //    The feed spans the WHOLE native canvas, so content occupying r.w of
+      //    nx native pixels is carried by only r.w*procW/nx feed pixels.
+      //    Comparing the feed to the content's own extent instead exempted
+      //    anything that did not fill the wall -- pillarboxed, 4:3 or
+      //    1:1-mapped content skipped the ceiling entirely and was drawn
+      //    sharper than the chain can deliver, while the build plan still
+      //    quoted the limit. Trigger and target both scale off the wall now.
       let content;
       const tgtW=Math.max(1,Math.round(r.w/decim)), tgtH=Math.max(1,Math.round(r.h/decim));
-      if(S.procOn && (S.procW<r.w || S.procH<r.h)){
-        const pw=Math.max(1,Math.min(S.procW,Math.round(r.w))),
-              ph=Math.max(1,Math.min(S.procH,Math.round(r.h)));
+      if(S.procOn && (S.procW<nx || S.procH<ny)){
+        const pw=Math.max(1,Math.round(r.w*Math.min(1,S.procW/nx))),
+              ph=Math.max(1,Math.round(r.h*Math.min(1,S.procH/ny)));
         const stage1=GLE.boxTo(srcT,S.srcW,S.srcH,pw,ph,S.scaler==='cheap');
         content=GLE.boxTo(stage1.t,stage1.w,stage1.h,tgtW,tgtH,S.scaler==='cheap');
         GLE.give(stage1);
@@ -1283,21 +1317,30 @@ function updateReadout(){
   $('roRetina').textContent = retina.toFixed(1)+' m';
   $('roSafe').textContent   = safe.toFixed(1)+' m';
 
-  const ang = 2*Math.atan((S.wallW/2)/S.dist)*180/Math.PI;
+  // The whole span, gaps included — an array subtends far more than one screen.
+  const ang = 2*Math.atan((spanW()/2)/S.dist)*180/Math.PI;
   $('roSub').textContent = ang.toFixed(0)+'°';
 
-  const cr=contrastRatio(), amb=ambientFraction();
+  const cr=contrastRatio(), blk=blackFraction();
   const ce=$('roContrast');
   ce.textContent = cr===Infinity ? '∞' : (cr>=1000? (cr/1000).toFixed(1)+'k:1' : Math.round(cr)+':1');
   ce.className = cr>=400?'ok':cr>=80?'mid':'no';
+  ce.title = S.offAxis>0 ? `At ${S.offAxis}° off-axis. On axis it would be `+
+                           `${(()=>{const a=ambientFraction();return a<=1e-6?'∞':Math.round((1+a)/a);})()}:1.`
+                         : 'On axis.';
+  const angNote = S.offAxis>0 ? ` at <b>${S.offAxis}°</b> off-axis` : '';
   if(S.ambMode==='photo'){
     const refl=S.lux*S.reflect/Math.PI;
+    // Quote the driven peak, not the spec sheet: at 20% drive a 1000 nit panel
+    // is a 200 nit panel, and the wash it has to fight is unchanged.
+    const peak=effectiveNits();
+    const drive=S.wallBright<0.999 ? ` driven to <b>${Math.round(peak)} nits</b>` : '';
     $('photoHint').innerHTML=`Reflected off the face ≈ <b>${refl.toFixed(1)} nits</b> against a `+
-      `${S.nits} nit panel → black sits at <b>${(100*amb/(1+amb)).toFixed(1)}%</b> of white, `+
-      `on-site contrast ≈ <b>${cr===Infinity?'∞':Math.round(cr)}:1</b>. Estimate — derived from `+
+      `${S.nits} nit panel${drive} → black sits at <b>${(100*blk).toFixed(1)}%</b> of white, `+
+      `on-site contrast ≈ <b>${cr===Infinity?'∞':Math.round(cr)}:1</b>${angNote}. Estimate — derived from `+
       `lux × reflectance ÷ π, not measured.`;
   } else {
-    $('photoHint').innerHTML=`Manual wash: black sits at <b>${(100*amb/(1+amb)).toFixed(1)}%</b> of white.`;
+    $('photoHint').innerHTML=`Manual wash: black sits at <b>${(100*blk).toFixed(1)}%</b> of white${angNote}.`;
   }
 
   $('distHint').innerHTML =
@@ -1439,8 +1482,9 @@ function setDist(v){ S.dist=clamp(v,.3,200); $('dist').value=Math.min(60,S.dist)
 $('dist').oninput=e=>setDist(parseFloat(e.target.value));
 $('distN').oninput=e=>{ const v=parseFloat(e.target.value); if(isFinite(v)) setDist(v); };
 document.querySelectorAll('[data-jump]').forEach(b=>b.onclick=()=>{
-  const j=b.dataset.jump;
-  setDist(j==='near'? Math.max(1,S.wallW*0.4) : j==='mid'? S.wallW*1.2 : S.wallW*2.5);
+  // Off the whole span: "back of house" for a 21 m array is not 15 m.
+  const j=b.dataset.jump, w=spanW();
+  setDist(j==='near'? Math.max(1,w*0.4) : j==='mid'? w*1.2 : w*2.5);
 });
 
 $('fitMode').onchange=e=>{S.fitMode=e.target.value;draw()};
@@ -1695,7 +1739,12 @@ function composeExport(btn){
   c.font='600 22px Segoe UI, sans-serif'; c.fillStyle='#ff9f1c';
   c.fillText('SQUINT', 20, a.height+34);
   c.font='15px Consolas, monospace'; c.fillStyle='#e8ebef';
-  const l1 = `${S.wallW} × ${S.wallH} m wall   ·   viewer at ${S.dist.toFixed(1)} m   ·   ${S.name}`;
+  // State the span the recipient is being asked to judge, not one screen of it.
+  const span=spanW(), arrN=S.arrayOn?Math.max(2,S.arrayN|0):1;
+  const wallTxt = arrN>1
+    ? `${arrN} × ${S.wallW} m screens on ${S.arrayGap.toFixed(2)} m gaps = ${span.toFixed(2)} × ${S.wallH} m overall`
+    : `${S.wallW} × ${S.wallH} m wall`;
+  const l1 = `${wallTxt}   ·   viewer at ${S.dist.toFixed(1)} m   ·   ${S.name}`;
   const l2 = ab
     ? `A: ${fmtPitch(S.pitchA)} mm → ${nx}×${ny}      B: ${fmtPitch(S.pitchB)} mm → ${nativeRes(S.pitchB).nx}×${nativeRes(S.pitchB).ny}      eye resolves ${(MM_PER_M*S.dist).toFixed(2)} mm`
     : `${fmtPitch(S.pitchA)} mm pitch → ${nx} × ${ny} native   ·   eye resolves ${(MM_PER_M*S.dist).toFixed(2)} mm   ·   acuity limit ${(S.pitchA/MM_PER_M).toFixed(1)} m`;
@@ -1703,17 +1752,24 @@ function composeExport(btn){
   c.fillStyle='#8b939e'; c.fillText(l2, 120, a.height+58);
 
   // The viewing contract. Angular equivalence holds only when displayed width
-  // and viewing distance keep the same ratio as wall width to viewer distance.
-  const ratio = S.dist/S.wallW;
+  // and viewing distance keep the same ratio as wall width to viewer distance
+  // -- measured against the WHOLE span, or an array's contract is wrong by the
+  // ratio of the array to one screen (3.5x for three 6 m screens on 1.5 m gaps),
+  // in the one artifact that leaves this machine and gets quoted.
+  const ratio = S.dist/span;
+  // In A/B the PNG holds two wall views side by side, so the contract is about
+  // each panel's displayed width, not the width of the file.
+  const what = ab ? 'EACH panel is' : 'it is';
   c.fillStyle='#ff9f1c';
-  c.fillText(`Angularly true only when viewed from ${ratio.toFixed(2)} × its displayed width`+
+  c.fillText(`Angularly true only when ${what} viewed from ${ratio.toFixed(2)} × its displayed width`+
              `  (e.g. 25 cm wide → view from ${(25*ratio).toFixed(0)} cm). Otherwise indicative only.`,
              120, a.height+86);
   const cr=contrastRatio();
   c.fillStyle='#5f6873';
   c.fillText(`zoom ${S.zoomMode} · fill ${(S.fill*100)|0}% · ${S.bits<16?S.bits+'-bit':'unquantised'}`+
              ` @ ${(S.wallBright*100)|0}% drive · ${S.ambMode==='photo'
-                ? `${S.nits} nits / ${S.lux} lux / ${(S.reflect*100).toFixed(0)}% face`
+                ? `${S.nits} nits${S.wallBright<0.999?` (${Math.round(effectiveNits())} driven)`:''}`+
+                  ` / ${S.lux} lux / ${(S.reflect*100).toFixed(0)}% face`
                 : `manual wash ${(S.ambient*100)|0}%`}`+
              ` · contrast ≈ ${cr===Infinity?'∞':Math.round(cr)}:1 · ${S.offAxis}° off-axis`+
              ` · linear-light GPU render · audience acuity baked in`, 120, a.height+110);
@@ -1736,6 +1792,7 @@ function composeExport(btn){
 window.SQUINT = { S, nativeRes, contentRect, cellPx, draw, ppmmDev, viewUnder,
                   geo:()=>geoA, geoB:()=>geoB, ARCMIN_RAD, MM_PER_M,
                   GLE, selftest, ambientFraction, contrastRatio, offAxisGain,
+                  effectiveNits, blackFraction, spanW,
                   CABS, cab, cabPitch, cabPxY, syncFromCabinets, screenRes,
                   effectiveRes, gapPx, syncPlan, exportTemplate };
 
@@ -1760,7 +1817,7 @@ function syncPlan(){
   } else {
     L.push(`pitch          ${pitch.toFixed(2)} mm  <span class="mid">(free size — not cabinet-quantised)</span>`);
   }
-  L.push(`physical       ${(S.wallW*n + S.arrayGap*(n-1)*(n>1?1:0)).toFixed(2)} × ${S.wallH.toFixed(2)} m overall`);
+  L.push(`physical       ${spanW().toFixed(2)} × ${S.wallH.toFixed(2)} m overall`);
   if(S.procOn){
     const cls=eff.limited?'no':'ok';
     L.push(`feed           ${S.procW} × ${S.procH}`);
