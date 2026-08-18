@@ -394,7 +394,7 @@ video{position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-e
         <button class="btn wide acc" id="calOpen">Calibrate full-screen…</button>
         <p class="hint">Opens over the canvas so the card can reach its true size at any sidebar width. You can also drag the sidebar's right edge.</p>
         <div id="calCard">85.60 × 53.98 mm</div>
-        <div class="row"><label>Card width</label><input type="range" id="calR" min="180" max="900" value="324"><span class="val" id="calV">3.78</span></div>
+        <div class="row"><label>Card width</label><input type="range" id="calR" min="180" max="1200" value="324"><span class="val" id="calV">3.78</span></div>
         <div class="row"><label>Your dist.</label><input type="number" id="monDist" value="600" step="25"><span class="val">mm</span></div>
         <p class="hint" id="calHint"></p>
       </div>
@@ -480,10 +480,10 @@ video{position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-e
    ===================================================================== */
 
 const CROP_CAP   = 4096;                 // max native-crop buffer edge, in px
-// Canvas 2D filters carry the acuity model. Without them the tool would render
-// an unblurred image while still claiming to simulate the eye — detect, warn.
-const HAS_FILTER = (()=>{ try{ const c=document.createElement('canvas').getContext('2d');
-  c.filter='blur(1px)'; return c.filter==='blur(1px)'; }catch(e){ return false; } })();
+// (A canvas-2D `filter` probe used to live here, from when 2D carried the
+// acuity model. The GL rewrite made it dead, but it still READ like a live
+// capability gate — the one thing a fossil must never do in a file whose whole
+// claim is that there is exactly one render path.)
 const ARCMIN_RAD = 2.908882e-4;          // 1 arcminute in radians
 const MM_PER_M   = 0.2909;               // resolvable mm of detail per metre of distance
 const FWHM       = 2.3548;
@@ -492,7 +492,7 @@ const $ = id => document.getElementById(id);
 const clamp = (v,a,b) => v<a?a:v>b?b:v;
 
 const S = {
-  wallW:6, wallH:3, pitchA:2.9, pitchB:6, fill:.5,
+  wallW:6, wallH:3, pitchA:2.9, pitchB:3.9, fill:.5,   // pitchB must match the DOM default
   // Event walls are built from cabinets, not typed as arbitrary rectangles, and
   // the pitch is DERIVED from the tile: a "2.6 mm" 500 mm cabinet carries 192
   // pixels, so the true pitch is 500/192 = 2.604 and a 12-wide wall is exactly
@@ -511,9 +511,10 @@ const S = {
 };
 
 /* ---------- scratch canvases ---------- */
+// Six more of these existed for the canvas-2D renderer. The GL core needs
+// exactly one: the offscreen reference wall that wipe mode composites from.
 const mk = () => document.createElement('canvas');
-const tmp=[mk(),mk()], contentCv=mk(), cropCv=mk(), offA=mk(), offB=mk();
-const idealCv=mk(), idealOff=mk();   // offscreen reference wall for wipe mode
+const idealCv=mk();
 
 /* ================= geometry ================= */
 /* Generic rental cabinets, by pitch. Every one is a 500 mm tile carrying a whole
@@ -588,7 +589,13 @@ function contentRect(nx,ny){
   const ar = S.srcW/S.srcH, wr = nx/ny;
   let w,h;
   if(S.fitMode==='stretch'){ w=nx; h=ny; }
-  else if(S.fitMode==='one'){ w=S.srcW; h=S.srcH; }
+  // 1:1 must land on whole wall pixels. An odd/even parity mismatch between
+  // source and wall put the rect on a half-pixel, so LED centres fell exactly
+  // on source-pixel boundaries and the mapping stopped being 1:1 at all.
+  else if(S.fitMode==='one'){
+    const ox=Math.round((nx-S.srcW)/2), oy=Math.round((ny-S.srcH)/2);
+    return { x:ox, y:oy, w:S.srcW, h:S.srcH };
+  }
   else {
     const cover = S.fitMode==='fill';
     const wider = ar>wr;
@@ -647,12 +654,25 @@ const GLE = (()=>{
   const F = s => `#version 300 es\nprecision highp float;\nprecision highp sampler2D;\n`+SRGB+`
     uniform sampler2D uTex; in vec2 vUV; out vec4 oCol;\n`+s;
 
+  // Composite the sampled texel over black, in LINEAR light. sRGB internal
+  // formats decode RGB but leave alpha linear, so rgb*a is the true composite.
+  // Without it, the hidden RGB under a transparent PNG's padding (white matte
+  // is a common export) averages into the LED grid at full intensity. Every
+  // intermediate this tool writes has alpha 1, so it is a no-op everywhere
+  // except a genuinely transparent source.
+  const OVB = `vec3 ovb(vec4 c){ return c.rgb*c.a; }`;
+
   // Exact separable area reduction along ONE axis, for any ratio up to 64x.
   // Every source texel contributes its true overlap weight, so odd sizes and
   // non-integer ratios are handled correctly -- a 2x2-averaging chain silently
   // drops the last row of an odd dimension, and a chain that stops when either
   // axis is within 2x leaves the other axis undersampled.
+  // 65 taps, not 64: a fractional ratio just under 64 starting partway through
+  // a texel spans ceil(frac(s0)+r) = 65 of them, and stopping at 64 dropped the
+  // trailing sliver out of both the sum AND wsum -- renormalising as though it
+  // did not exist, which is exactly the "true overlap weight" claim failing.
   const FS_REDUCE = F(`uniform vec2 uSrc, uDst; uniform int uAxis, uNearest;
+    `+OVB+`
     void main(){
       vec2 d=floor(vUV*uDst);
       if(uNearest==1){
@@ -660,33 +680,34 @@ const GLE = (()=>{
         // LINEAR filter, which texture() would otherwise apply.
         ivec2 p=ivec2(floor((d+0.5)*(uSrc/uDst)));
         p=clamp(p,ivec2(0),ivec2(uSrc)-ivec2(1));
-        oCol=vec4(texelFetch(uTex,p,0).rgb,1.0); return; }
+        oCol=vec4(ovb(texelFetch(uTex,p,0)),1.0); return; }
       vec3 acc=vec3(0.0); float wsum=0.0;
       if(uAxis==0){
         float r=uSrc.x/uDst.x, s0=d.x*r, s1=(d.x+1.0)*r;
         float y=(d.y+0.5)/uSrc.y;
-        for(int i=0;i<64;i++){
+        for(int i=0;i<65;i++){
           float x=floor(s0)+float(i); if(x>=s1) break;
           float w=min(x+1.0,s1)-max(x,s0); if(w<=0.0) continue;
-          acc+=texture(uTex,vec2((x+0.5)/uSrc.x,y)).rgb*w; wsum+=w; }
+          acc+=ovb(texture(uTex,vec2((x+0.5)/uSrc.x,y)))*w; wsum+=w; }
       } else {
         float r=uSrc.y/uDst.y, s0=d.y*r, s1=(d.y+1.0)*r;
         float x=(d.x+0.5)/uSrc.x;
-        for(int i=0;i<64;i++){
+        for(int i=0;i<65;i++){
           float y=floor(s0)+float(i); if(y>=s1) break;
           float w=min(y+1.0,s1)-max(y,s0); if(w<=0.0) continue;
-          acc+=texture(uTex,vec2(x,(y+0.5)/uSrc.y)).rgb*w; wsum+=w; }
+          acc+=ovb(texture(uTex,vec2(x,(y+0.5)/uSrc.y)))*w; wsum+=w; }
       }
       oCol=vec4(acc/max(wsum,1e-6),1.0); }`);
 
   // plain resize for magnification (wall out-resolves the content)
   const FS_COPY = F(`uniform int uNearest; uniform vec2 uSrc, uDst;
+    `+OVB+`
     void main(){
       if(uNearest==1){
         ivec2 p=ivec2(floor((floor(vUV*uDst)+0.5)*(uSrc/uDst)));
         p=clamp(p,ivec2(0),ivec2(uSrc)-ivec2(1));
-        oCol=vec4(texelFetch(uTex,p,0).rgb,1.0); return; }
-      oCol=vec4(texture(uTex,vUV).rgb,1.0); }`);
+        oCol=vec4(ovb(texelFetch(uTex,p,0)),1.0); return; }
+      oCol=vec4(ovb(texture(uTex,vUV)),1.0); }`);
 
   // place the resampled content into the LED crop, black outside the content
   const FS_PLACE = F(`uniform vec2 uLedSize, uCropOrigin; uniform float uDecim;
@@ -695,7 +716,9 @@ const GLE = (()=>{
       vec2 led=floor(vUV*uLedSize)+0.5;
       vec2 nat=uCropOrigin+led*uDecim;
       vec2 uv=(nat-uRect.xy)/uRect.zw;
-      if(uv.x<0.0||uv.y<0.0||uv.x>1.0||uv.y>1.0){ oCol=vec4(0,0,0,1); return; }
+      // Half-open: accepting BOTH 0.0 and 1.0 let clamp-to-edge duplicate the
+      // last row and column, so an N-pixel 1:1 extent could light N+1 LEDs.
+      if(uv.x<0.0||uv.y<0.0||uv.x>=1.0||uv.y>=1.0){ oCol=vec4(0,0,0,1); return; }
       oCol=vec4(texture(uTex,uv).rgb,1.0); }`);
 
   // bit depth / PWM: quantise in the SIGNAL domain, which is what produces
@@ -714,8 +737,16 @@ const GLE = (()=>{
     // array: screens of uScrNx separated by uGapPx, repeating every uArrPitch
     uniform float uArrPitch, uScrNx, uGapPx;
     uniform vec2 uCabPx; uniform float uTileVar;
-    float hash21(vec2 p){ p=fract(p*vec2(127.1,311.7));
-      return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453); }
+    // No leading fract(p*vec2(127.1,311.7)): on the INTEGER cabinet indices
+    // this is actually fed, that advances the inputs by 0.1 and 0.7 and repeats
+    // every 10 cabinets, and it makes (0,0) an exact fixed point returning 0 --
+    // so the top-left cabinet was pinned to the dimmest value in the
+    // distribution in every session, at every pitch, which reads as a defect in
+    // the wall being simulated rather than as stock scatter.
+    float hash21(vec2 p){
+      vec3 q=fract(vec3(p.xyx)*0.1031+0.117);
+      q+=dot(q,q.yzx+33.33);
+      return fract((q.x+q.y)*q.z); }
     // antiderivative of the lit-area indicator, so coverage is exact at any
     // footprint -- no threshold, no skipped gap, and it converges smoothly to
     // the fill factor when a screen pixel spans several cells
@@ -731,9 +762,9 @@ const GLE = (()=>{
       vec3 col=vec3(0.0);
       if(wall.x>=0.0&&wall.y>=0.0&&wall.x<uNative.x&&wall.y<uNative.y){
         if(uIdeal==1){
-          vec2 uv=(wall-uRect.xy)/uRect.zw;
-          col = (uv.x<0.0||uv.y<0.0||uv.x>1.0||uv.y>1.0) ? vec3(0.0)
-                                                         : texture(uContent,uv).rgb;
+          vec2 uv=(wall-uRect.xy)/uRect.zw;   // half-open, matching FS_PLACE
+          col = (uv.x<0.0||uv.y<0.0||uv.x>=1.0||uv.y>=1.0) ? vec3(0.0)
+                                                           : texture(uContent,uv).rgb;
         } else {
           // Gaps between physical screens show nothing -- content mapped there
           // is simply lost, which is the point of modelling an array at all.
@@ -750,11 +781,15 @@ const GLE = (()=>{
             vec2 w=1.0/uCell;
             col*=cov1(wall.x,w.x,s)*cov1(wall.y,w.y,s)*uGain;
           }
-          // Cabinet-to-cabinet brightness spread. Indexed per screen, so each
-          // screen carries its own tile stock rather than one continuous field.
+          // Cabinet-to-cabinet brightness spread. Cabinets are indexed within
+          // their own screen (that is how they are physically laid out), but
+          // the screen index has to enter the hash or every screen in an array
+          // is a brightness-clone of the first -- which is the opposite of the
+          // "each screen carries its own tile stock" this is meant to model.
           if(uTileVar>0.0){
+            float scr = uArrPitch>0.5 ? floor(wall.x/uArrPitch) : 0.0;
             vec2 ci=floor(vec2(localX,wall.y)/uCabPx);
-            col*=1.0+(hash21(ci)-0.5)*2.0*uTileVar;
+            col*=1.0+(hash21(ci+vec2(scr*37.0,scr*17.0))-0.5)*2.0*uTileVar;
           }
         }
         col*=uOffGain;
@@ -830,9 +865,19 @@ const GLE = (()=>{
     }
     return e; }
   // Discarding a full pool without deleting would grow GPU memory every frame.
+  // But refusing every NEW entry once full is just as bad: crop and blur sizes
+  // change on every frame of a pan or zoom, so the pool filled with dimensions
+  // that will never recur and then deleted its incoming texture forever after —
+  // permanently defeating itself while still pinning ~24 dead buffers. Evict
+  // oldest-first instead, on a byte budget as well as a count, so the pool
+  // tracks the current working set rather than the first sizes it ever saw.
+  const POOL_MAX=24, POOL_BYTES=384*1024*1024;   // RGBA16F = 8 bytes/px
+  function poolBytes(){ let s=0; for(const e of pool) s+=e.w*e.h*8; return s; }
+  function evict(){ const o=pool.shift();
+    gl.deleteFramebuffer(o.fb); gl.deleteTexture(o.t); }
   function give(e){ if(!e) return;
-    if(pool.length<24){ pool.push(e); return; }
-    gl.deleteFramebuffer(e.fb); gl.deleteTexture(e.t); }
+    pool.push(e);
+    while(pool.length>POOL_MAX || (pool.length>1 && poolBytes()>POOL_BYTES)) evict(); }
 
   function pass(pr, inTex, out, setu){
     gl.useProgram(pr.p); gl.bindVertexArray(quadVAO);
@@ -854,11 +899,18 @@ const GLE = (()=>{
     if(srcKey===key && key) return srcTex;
     gl.bindTexture(gl.TEXTURE_2D,srcTex);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+    while(gl.getError()!==gl.NO_ERROR){}          // start from a clean slate
     gl.texImage2D(gl.TEXTURE_2D,0,gl.SRGB8_ALPHA8,gl.RGBA,gl.UNSIGNED_BYTE,img);
+    const err=gl.getError();
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    // A failed upload leaves the PREVIOUS file's pixels in this texture. Record
+    // the key anyway and the tool would keep sampling that stale content while
+    // the UI and the exported caption name the new file -- a silent wrong
+    // answer, which is the one failure mode this whole tool argues against.
+    if(err!==gl.NO_ERROR){ srcKey=''; return null; }
     srcKey=key||'';
     return srcTex; }
 
@@ -975,7 +1027,7 @@ function cellPx(pitch, VW, VH){
 }
 
 /* ================= render ================= */
-function renderView(cv, off, pitch, ideal, dims){
+function renderView(cv, pitch, ideal, dims){
   const dpr=window.devicePixelRatio||1;
   // dims is supplied for offscreen canvases, which have no layout size.
   const VW = dims ? dims.w : Math.max(1,Math.round(cv.clientWidth*dpr));
@@ -1008,6 +1060,14 @@ function renderView(cv, off, pitch, ideal, dims){
 
   if(S.src){
     const srcT = GLE.uploadSource(S.src, S.srcW, S.srcH, S.isVideo?'':(S.name+S.srcW+S.srcH));
+    // Refuse rather than draw: the alternative is the previous file's pixels
+    // wearing this file's name in the readouts and the export caption.
+    if(!srcT){
+      S.src=null; S.isVideo=false;
+      $('drop').classList.remove('hide');
+      toast('The GPU rejected that file — it is larger than this machine can hold as one texture');
+      return {cell,nx,ny,ox,oy,sTarget,sMon,decim:1,gridDrawn:false,amb,figVisible:true};
+    }
     let scene;
     if(ideal){
       // Reference wall: no LED grid at all, box-filtered straight to the screen
@@ -1247,18 +1307,18 @@ function draw(){
   $('wrapB').style.display = ab?'block':'none';
   $('wipeBar').style.display = wipe?'block':'none';
 
-  geoA = renderView($('cvA'), offA, S.pitchA, false);
+  geoA = renderView($('cvA'), S.pitchA, false);
   geoB = null;
 
   if(ab){
-    geoB = renderView($('cvB'), offB, S.pitchB, false);
+    geoB = renderView($('cvB'), S.pitchB, false);
     const a=nativeRes(S.pitchA), b=nativeRes(S.pitchB);
     $('labA').textContent = `A · ${fmtPitch(S.pitchA)} mm · ${a.nx}×${a.ny}`;
     $('labB').textContent = `B · ${fmtPitch(S.pitchB)} mm · ${b.nx}×${b.ny}`;
   } else if(wipe){
     // Left of the bar = the ideal source; right = the real wall (already in cvA).
     const cv=$('cvA');
-    renderView(idealCv, idealOff, S.pitchA, true, {w:cv.width,h:cv.height});
+    renderView(idealCv, S.pitchA, true, {w:cv.width,h:cv.height});
     const c=cv.getContext('2d');
     const xw=Math.round(cv.width*S.wipe);
     c.save(); c.beginPath(); c.rect(0,0,xw,cv.height); c.clip();
@@ -1347,7 +1407,7 @@ function updateReadout(){
     `At <b>${S.dist.toFixed(1)} m</b> the eye resolves <b>${r_mm.toFixed(2)} mm</b>. ` +
     (ratio>=1 ? `Your ${fmtPitch(S.pitchA)} mm pitch is <b>coarser</b> than that — pixels are individually visible.`
               : `Your ${fmtPitch(S.pitchA)} mm pitch is <b>finer</b> than that — the grid fuses.`) +
-    `<br>Acuity limit <b>${retina.toFixed(1)} m</b> (3.44 × pitch); conservatively structure-free from <b>${safe.toFixed(1)} m</b>, since a repeating grid stays detectable past the limit for a single feature. Common "1 m per mm" rule: ${S.pitchA.toFixed(1)} m (aggressive minimum).`;
+    `<br>Acuity limit <b>${retina.toFixed(1)} m</b> (3.44 × pitch); conservatively structure-free from <b>${safe.toFixed(1)} m</b>, since a repeating grid stays detectable past the limit for a single feature. That buffer assumes typical fill — low-fill SMD product presents a higher-contrast grid and stays detectable somewhat further than high-fill GOB/COB. Common "1 m per mm" rule: ${S.pitchA.toFixed(1)} m (aggressive minimum).`;
 
   // On-screen scale vs. real size, and the distance your own eye is effectively at.
   const zl = geoA ? (geoA.cell/S.pitchA/ppmmDev()) : 1;
@@ -1368,7 +1428,7 @@ function updateReadout(){
     if(S.figure && geoA.figVisible===false) txt += ` · scale figure out of frame`;
     // Near-unity resampling is where real walls shimmer.
     if(S.src){
-      const {nx}=nativeRes(S.pitchA), rr=contentRect(nx,nativeRes(S.pitchA).ny);
+      const {nx,ny}=nativeRes(S.pitchA), rr=contentRect(nx,ny);
       const sc=rr.w/S.srcW;
       if(sc>0.85 && sc<1.15 && Math.abs(sc-1)>0.001)
         txt += ` · ⚠ moiré risk: content is at ${(sc*100).toFixed(0)}% of native`;
@@ -1378,7 +1438,7 @@ function updateReadout(){
 }
 
 /* ================= measure tool ================= */
-let measuring=false, mStart=null;
+let measuring=false;
 function measureReport(wpx,hpx,pitch,tag){
   pitch = pitch || S.pitchA;
   const wallPxH = hpx;                                  // wall pixels of height
@@ -1563,20 +1623,29 @@ let raf=null;
 function loop(){ draw(); raf=requestAnimationFrame(loop); }
 function stopLoop(){ if(raf){cancelAnimationFrame(raf);raf=null;} }
 
-let loadToken=0, currentUrl=null;
+let loadToken=0, currentUrl=null, pendingUrl=null;
 // Loading a second file before the first decodes must not let the stale
 // callback win, and each object URL has to be released or every load leaks.
 function loadFile(f){
   if(!f) return;
   const myToken=++loadToken;
+  // The token guard only helps if the old handler still RUNS. Assigning
+  // vid.onloadedmetadata replaces the previous load's only callback, so a load
+  // superseded before its metadata arrives (or one that simply stalls) could
+  // never reach its own drop() and leaked its blob for the life of the page.
+  // Release it here, the last point at which it is still reachable.
+  if(pendingUrl){ try{ URL.revokeObjectURL(pendingUrl); }catch(e){} pendingUrl=null; }
   stopLoop();
   try{ vid.pause(); }catch(e){}
   S.name=f.name;
   const url=URL.createObjectURL(f);
+  pendingUrl=url;
   // A superseded or failed load must release its own URL, or every abandoned
   // load leaks one for the lifetime of the page.
-  const drop=()=>{ try{ URL.revokeObjectURL(url); }catch(e){} };
-  const release=()=>{ if(currentUrl && currentUrl!==url) URL.revokeObjectURL(currentUrl); currentUrl=url;
+  const drop=()=>{ if(pendingUrl===url) pendingUrl=null;
+                   try{ URL.revokeObjectURL(url); }catch(e){} };
+  const release=()=>{ if(pendingUrl===url) pendingUrl=null;
+                      if(currentUrl && currentUrl!==url) URL.revokeObjectURL(currentUrl); currentUrl=url;
                       GLE.invalidateSource(); };
   // File.type is empty for some dragged/local files; fall back to extension.
   const ext=(f.name.split('.').pop()||'').toLowerCase();
@@ -1642,7 +1711,7 @@ stage.addEventListener('mousedown',e=>{
   if(S.mode==='wipe' && Math.abs(e.clientX-r.left-r.width*S.wipe)<14){ drag={t:'wipe'}; return; }
   // Remember which view the drag STARTED in — in A/B the two views have
   // different cell sizes, so measuring B with A's geometry reports nonsense.
-  if(measuring){ drag={t:'meas',x:e.clientX-r.left,y:e.clientY-r.top,view:viewUnder(e.clientX)}; mStart=drag;
+  if(measuring){ drag={t:'meas',x:e.clientX-r.left,y:e.clientY-r.top,view:viewUnder(e.clientX)};
     const b=$('measureBox'); b.style.display='block'; b.style.left=drag.x+'px'; b.style.top=drag.y+'px'; b.style.width='0px'; b.style.height='0px'; return; }
   drag={t:'pan',x:e.clientX,y:e.clientY,px:S.panX,py:S.panY};
 });
@@ -1699,7 +1768,11 @@ stage.addEventListener('wheel',e=>{
 stage.addEventListener('dblclick',()=>{ S.panX=S.panY=0; draw(); });
 
 window.addEventListener('keydown',e=>{
-  if(e.target.tagName==='INPUT') return;
+  // SELECT and TEXTAREA use the arrows too, and BUTTON uses space. Guarding
+  // only INPUT meant changing the bit-depth dropdown with the keyboard ALSO
+  // moved the viewer 0.5 m, silently invalidating the reading being looked at.
+  if(['INPUT','SELECT','TEXTAREA','BUTTON'].includes(e.target.tagName)) return;
+  if(e.target.isContentEditable) return;
   if(e.key===' '&&S.isVideo){ e.preventDefault(); $('playBtn').click(); }
   if(e.key==='ArrowRight') setDist(S.dist+ (e.shiftKey?5:.5));
   if(e.key==='ArrowLeft')  setDist(S.dist- (e.shiftKey?5:.5));
@@ -1726,7 +1799,7 @@ function exportPng(btn){
              btn.textContent='Save comparison PNG'; btn.disabled=false; } }
 }
 function composeExport(btn){
-  const a=$('cvA'), ab=S.mode==='ab';
+  const a=$('cvA'), ab=S.mode==='ab', wipe=S.mode==='wipe';
   const b=$('cvB');
   const W=ab?a.width+b.width+8:a.width, H=a.height+124;
   const out=mk(); out.width=W; out.height=H;
@@ -1734,6 +1807,28 @@ function composeExport(btn){
   c.fillStyle='#0e1013'; c.fillRect(0,0,W,H);
   c.drawImage(a,0,0);
   if(ab) c.drawImage(b,a.width+8,0);
+
+  // In wipe mode the left of the bar is the IDEAL reference, not the
+  // simulation. Exporting that under the caption's authority -- with the
+  // on-screen SOURCE|WALL label being a DOM overlay that never reaches the
+  // bitmap -- shipped a deck slide that could be mostly un-simulated content
+  // wearing the simulation's credentials. Bake the seam and the labels in.
+  if(wipe){
+    const xw=Math.round(a.width*S.wipe);
+    c.save();
+    c.strokeStyle='#ff9f1c'; c.lineWidth=2; c.setLineDash([9,7]);
+    c.beginPath(); c.moveTo(xw+0.5,0); c.lineTo(xw+0.5,a.height); c.stroke();
+    c.setLineDash([]);
+    c.font='600 13px Segoe UI, sans-serif'; c.textBaseline='top';
+    const tag=(txt,x,align)=>{ c.textAlign=align;
+      const w=c.measureText(txt).width+16;
+      c.fillStyle='rgba(14,16,19,.82)';
+      c.fillRect(align==='right'?x-w:x, 10, w, 24);
+      c.fillStyle='#ff9f1c'; c.fillText(txt, align==='right'?x-8:x+8, 16); };
+    if(xw>70)            tag('SOURCE (not simulated)', xw-4, 'right');
+    if(a.width-xw>70)    tag('SIMULATED WALL', xw+4, 'left');
+    c.restore();
+  }
 
   const {nx,ny}=nativeRes(S.pitchA);
   c.font='600 22px Segoe UI, sans-serif'; c.fillStyle='#ff9f1c';
@@ -1766,7 +1861,8 @@ function composeExport(btn){
              120, a.height+86);
   const cr=contrastRatio();
   c.fillStyle='#5f6873';
-  c.fillText(`zoom ${S.zoomMode} · fill ${(S.fill*100)|0}% · ${S.bits<16?S.bits+'-bit':'unquantised'}`+
+  c.fillText(`${wipe?'WIPE — left of the seam is the unsimulated source · ':''}`+
+             `zoom ${S.zoomMode} · fill ${(S.fill*100)|0}% · ${S.bits<16?S.bits+'-bit':'unquantised'}`+
              ` @ ${(S.wallBright*100)|0}% drive · ${S.ambMode==='photo'
                 ? `${S.nits} nits${S.wallBright<0.999?` (${Math.round(effectiveNits())} driven)`:''}`+
                   ` / ${S.lux} lux / ${(S.reflect*100).toFixed(0)}% face`
@@ -1808,7 +1904,6 @@ function syncPlan(){
   if(n>1){
     L.push(`per screen     ${sr.nx} × ${sr.ny}  (${n} screens)`);
     L.push(`gap            ${gp} px  ·  ${S.arrayGap.toFixed(2)} m each`);
-    const lost=gp*(n-1)*ny;
     L.push(`lost in gaps   <span class="no">${((gp*(n-1))/nx*100).toFixed(1)}%</span> of the canvas width`);
   }
   if(S.wallMode==='cab'){
@@ -1892,7 +1987,14 @@ function selftest(quiet){
     ambient:S.ambient,offAxis:S.offAxis,figure:S.figure,mode:S.mode,
     panX:S.panX,panY:S.panY,grid:S.grid,blur:S.blur,wallBright:S.wallBright,
     fitMode:S.fitMode,absBlur:S.absBlur,scaler:S.scaler,pitchB:S.pitchB,
-    nits:S.nits,lux:S.lux,reflect:S.reflect};
+    nits:S.nits,lux:S.lux,reflect:S.reflect,
+    // selftest() is the exported verification handle, so it has to be callable
+    // from the console mid-session. With an array live, check 1 could sample an
+    // inter-screen gap (fused ~0 -> FAIL); with tile variance set, the centre
+    // cabinet's own multiplier can push the 188 +/- 6 assertion out of band.
+    // A red "do not trust these numbers" banner from a healthy pipeline is its
+    // own kind of wrong number.
+    arrayOn:S.arrayOn,tileVar:S.tileVar,cabGrid:S.cabGrid,procOn:S.procOn};
   const res={pass:true,checks:[]};
   try{
     const N=64, cvT=document.createElement('canvas'); cvT.width=N; cvT.height=N;
@@ -1904,6 +2006,9 @@ function selftest(quiet){
     S.ambMode='manual'; S.ambient=0; S.offAxis=0; S.bits=16; S.wallBright=1;
     S.grid=true; S.blur=true; S.dist=5; S.wallW=1; S.wallH=1;
     S.zoomMode='free'; S.zoomFree=1;
+    // Neutralise everything that can perturb the two measurements, so a manual
+    // call reports on the pipeline and not on the user's current settings.
+    S.arrayOn=false; S.tileVar=0; S.cabGrid=false; S.procOn=false;
 
     // 1. linear-light fusion. Each LED averages an 8x8 block of the checker, so
     //    its value must be linear 0.5 -> sRGB 188. Gap off, because at this zoom
