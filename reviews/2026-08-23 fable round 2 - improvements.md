@@ -1,6 +1,6 @@
 # Fable round 2 — model judgment pass
 
-**Date:** 2026-08-18
+**Date:** 2026-08-23
 **Reviewer:** Fable (independent of the parallel Codex round 3; read-only)
 **Angle:** is the physics the code implements the physics an LED engineer would
 accept, and does any number leave the tool with more confidence than the model
