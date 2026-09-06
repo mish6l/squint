@@ -102,11 +102,14 @@ mapping and every downstream number slightly wrong.
 
 BUILD FROM CABINETS is the default. Pick a tile, set cabinets across and down,
 and the wall metres, the true pitch and the exact native resolution all derive.
-Custom takes cabinet width and height in mm plus pixels across; pixels down
-derive from the height (LED pixels are square), the hint shows the derived rows,
-and a height that is not a whole number of LEDs is flagged - and refused at
-export - because one of the three numbers is then a datasheet round-off or a
-typo. Free size is still there for quick what-ifs, and says so when you use it.
+Custom takes cabinet width and height in mm plus pixels across. LED pixels are
+square, so the row count derives from the height at the width pitch, and the
+simulated wall is built from that whole-row height. A typed height more than
+0.005 rows off a whole number gets a quantisation note in the hint; more than
+0.1 rows off gets a warning and blocks both PNG exports until the cabinet
+numbers are corrected, because one of the three is then a datasheet round-off
+or a typo. Free size is still there for quick what-ifs, and says so when you
+use it.
 
 PROCESSOR LIMIT is the one nobody models. A wall is fed from a processor
 output. If that feed is smaller than the wall's native grid, the wall is being

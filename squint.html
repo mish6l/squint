@@ -1516,7 +1516,7 @@ document.querySelectorAll('.sec>h3').forEach(h=>h.onclick=()=>h.parentElement.cl
 const PITCHES=[0.9,1.2,1.5,1.9,2.6,2.9,3.9,4.8,6.0,8.0,10.0];
 PITCHES.forEach(p=>{
   const c=document.createElement('div'); c.className='chip'; c.textContent=p.toFixed(1);
-  c.onclick=()=>{ S.pitchA=p; $('pitchA').value=p; draw(); };
+  c.onclick=()=>{ S.pitchA=p; $('pitchA').value=p; rePlan(); };   // the plan reports comp size: refresh it
   $('pitchChips').appendChild(c);
 });
 
@@ -1576,7 +1576,10 @@ function setCabMode(cabMode){
   // Free size inherits the cabinet-built wall, so show it: the rail otherwise
   // keeps its HTML defaults (6 / 3 / 2.9) while S and every export carry the
   // cabinet numbers.
-  else { $('wallW').value=S.wallW; $('wallH').value=S.wallH; $('pitchA').value=fmtPitch(S.pitchA); }
+  // Full precision into the EDITABLE fields: fmtPitch is a 3-dp label format,
+  // and a rounded 2.597 re-entered over a stored 2.5974… moves a 24-wide wall
+  // by a column (Codex, round 5).
+  else { $('wallW').value=String(S.wallW); $('wallH').value=String(S.wallH); $('pitchA').value=String(S.pitchA); }
   draw(); cabRefresh();
 }
 $('modeCab').onclick=()=>setCabMode(true);
@@ -1616,7 +1619,7 @@ document.querySelectorAll('[data-jump]').forEach(b=>b.onclick=()=>{
   setDist(j==='near'? Math.max(1,w*0.4) : j==='mid'? w*1.2 : w*2.5);
 });
 
-$('fitMode').onchange=e=>{S.fitMode=e.target.value;draw()};
+$('fitMode').onchange=e=>{S.fitMode=e.target.value;rePlan()};   // the plan reports source scale, which mapping changes
 $('scaler').onchange=e=>{S.scaler=e.target.value;draw()};
 $('zoomMode').onchange=e=>{S.zoomMode=e.target.value;S.panX=S.panY=0;draw()};
 $('zoomF').oninput=e=>{ S.zoomFree=Math.pow(1.06,+e.target.value); $('zoomFV').textContent=S.zoomFree.toFixed(2)+'×'; if(S.zoomMode!=='free'){S.zoomMode='free';$('zoomMode').value='free';} draw(); };
@@ -1733,7 +1736,7 @@ function loadFile(f){
       $('vidCtl').style.display='flex'; $('seekRow').style.display='flex';
       $('seek').max=Math.max(1,Math.floor((vid.duration||1)*100));
       $('drop').classList.add('hide');
-      vid.currentTime=Math.min(.1,(vid.duration||1)/2); draw();
+      vid.currentTime=Math.min(.1,(vid.duration||1)/2); rePlan();   // new source dims reach the plan
     };
     vid.onerror=()=>{ if(myToken===loadToken) toast('Could not decode that video'); drop(); };
   } else {
@@ -1743,7 +1746,7 @@ function loadFile(f){
       release();
       S.src=img; S.srcW=img.naturalWidth; S.srcH=img.naturalHeight; S.isVideo=false;
       $('vidCtl').style.display='none'; $('seekRow').style.display='none';
-      $('drop').classList.add('hide'); draw();
+      $('drop').classList.add('hide'); rePlan();   // new source dims reach the plan
     };
     img.onerror=()=>{ if(myToken===loadToken) toast('Could not decode that image'); drop(); };
     img.src=url;

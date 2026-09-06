@@ -1,6 +1,6 @@
 # Plan: Non-square Custom cabinets (FR-002 #1)
 
-Status: SHIPPED 2026-09-05 — commit `6c6f0cd` on `main`; gate as run: harness 91/91 over the committed blob + real-Chrome rows; Codex rounds 4/4b closed (4b's Low fixed, harness-proven, not re-reviewed).
+Status: SHIPPED 2026-09-05 — commit `6c6f0cd` on `main` (+ round-5 fixes, see Execution findings); gate as run: harness 91/91 over the committed blob + real-Chrome rows; Codex rounds 4/4b closed (4b's Low fixed, harness-proven, not re-reviewed).
 
 ## Overview
 The Custom cabinet row exposes only width-mm and pixels-across, and `cab()`
@@ -498,3 +498,39 @@ verbatim at `reviews/2026-09-05 codex round 4b - delta on the fixes.md`.
 **Final gate (2026-09-05):** harness **91/91**; real-Chrome rows (a)–(j) all
 correct on the final build; `selftest` 188 exact / 0.01 % before and after;
 `index.html` byte-identical to `squint.html`.
+
+### Codex round 5 — fresh pass on the committed build (2026-09-06, Mish's own run)
+
+Reviewed `6c6f0cd` against the round-5 brief with a stub-DOM harness of its own
+(18 432 preset/count/toggle states + an 805 781-case numeric sweep). Verdict:
+*not ready under the brief's compatibility requirements*. Five findings:
+
+1. **Med, mine — fixed.** `setCabMode(false)` wrote `fmtPitch(S.pitchA)` (3 dp)
+   into the *editable* Pitch A field while `S.pitchA` kept full precision;
+   re-entering the displayed `2.597` over a stored `2.5974…` moved preset 6 at
+   24 columns from 5544 to 5545. Now `String(S.pitchA)` (and `String()` on the
+   metre fields for symmetry).
+2. **Med, compat — kept, deliberately.** The `min(nx,ny)` stamp font also
+   changes *preset* guides when a preset is built portrait (1×2 of 500×500 →
+   256×512 guide: main font 18 → 14 px). My "every preset is landscape" claim
+   only held at 12×6. Codex's scoped alternative would keep the overflow for
+   presets to preserve chrome bytes; the stamp running off a narrow guide is the
+   defect, and it is chrome, not geometry or simulation pixels. **Recorded as
+   the one deliberate exception to preset byte-identity: layout-guide stamp
+   size on portrait walls.** Flip = scope the basis to `nonSq && custom`.
+3. **Low, mine — fixed.** README said any non-whole height is "flagged and
+   refused"; the policy is > 0.005 rows → quantisation note, > 0.1 rows →
+   warning + export refusal, and the wall is always built from whole rows.
+   Both READMEs now say exactly that.
+4. **Med, pre-existing — taken.** Pitch chips, mapping-mode changes and source
+   load did not refresh the build plan (which reports comp size and source
+   scale). Same family as the free-size fix; all three now call `rePlan()`.
+5. **Med, pre-existing — F3, unchanged.** View B draws A's tile px counts at
+   B's pitch (a 500×1000 tile reads as 748.8×1497.6 mm in B). Separately
+   scoped, as Codex itself recommends; its proposed helper is the F3 design.
+
+Confirmed by Codex: the final `tileMMY()`/`mmQ` construction holds over
+805 781 cases (max pre-rounding discrepancy ~1e-11 rows); every A-side
+consumer uses the tiled geometry; refusal cleanup and boot order correct.
+Review kept verbatim at `reviews/2026-09-05 codex round 5 - fresh pass
+(Mish's run).md`.
