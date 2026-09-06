@@ -102,7 +102,11 @@ mapping and every downstream number slightly wrong.
 
 BUILD FROM CABINETS is the default. Pick a tile, set cabinets across and down,
 and the wall metres, the true pitch and the exact native resolution all derive.
-Free size is still there for quick what-ifs, and says so when you use it.
+Custom takes cabinet width and height in mm plus pixels across; pixels down
+derive from the height (LED pixels are square), the hint shows the derived rows,
+and a height that is not a whole number of LEDs is flagged - and refused at
+export - because one of the three numbers is then a datasheet round-off or a
+typo. Free size is still there for quick what-ifs, and says so when you use it.
 
 PROCESSOR LIMIT is the one nobody models. A wall is fed from a processor
 output. If that feed is smaller than the wall's native grid, the wall is being
@@ -239,8 +243,10 @@ honest to leave it out, not because it was inconvenient.
   drives its LEDs well above the average luminance (4x at 25% fill), which an
   SDR monitor cannot display, so bright content clips there. Mean brightness is
   still exact once the structure fuses.
-- No moire simulation of a camera sensor, no HDR output, no per-panel calibration
-  or seam/tile variation.
+- No moire simulation of a camera sensor, no HDR output, no per-panel
+  calibration. (Tile-to-tile brightness variance IS simulated - the Tile
+  variance slider - since the event-wall build; the physical seam itself is
+  not, because on good stock it is nearly invisible.)
 
 
 KEYS
@@ -303,4 +309,10 @@ SCRIPTING HANDLE
 ----------------
 window.SQUINT exposes { S, nativeRes, contentRect, cellPx, draw, ppmmDev,
 viewUnder, geo, geoB, GLE, selftest, ambientFraction, contrastRatio,
-offAxisGain, ARCMIN_RAD, MM_PER_M } from the console.
+offAxisGain, effectiveNits, blackFraction, spanW, ARCMIN_RAD, MM_PER_M,
+CABS, cab, cabPitch, cabPxY, cabMMY, cabRowsRes, cabTileTxt, cabRefresh,
+syncFromCabinets, screenRes, effectiveRes, gapPx, syncPlan, exportTemplate }
+from the console. The cabinet helpers are how a change to the wall model gets
+verified: set S, call syncFromCabinets(); draw(); cabRefresh(), then read
+nativeRes(S.pitchA), cabPxY() and cabRowsRes() - numbers only the correct code
+can produce. selftest() alone cannot see a wrong cabinet height.
