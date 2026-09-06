@@ -1,6 +1,6 @@
 # Plan: Render honesty (v1.3) — the four pixel-simulation defects
 
-Status: EXECUTED 2026-09-06 — gate red on `e3cc230` (69/81), green after (116/116 incl. Codex round-6 rows); Codex rounds audit + 6 closed; awaiting `/commit` → `/ship` → v1.3.
+Status: SHIPPED 2026-09-06 — commit `c109388` on `main`; gate red on `e3cc230` (69/81), green after (116/116 incl. Codex round-6 rows); Codex rounds audit + 6 closed.
 
 ## Overview
 The 2026-09-06 pixel-simulation audit (Codex, Mish's run; verified by Fable on
