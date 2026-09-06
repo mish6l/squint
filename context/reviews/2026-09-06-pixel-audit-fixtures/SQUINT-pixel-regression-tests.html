@@ -486,38 +486,7 @@ video{position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-e
      Acuity modelled as a Gaussian LPF with FWHM = r  →  σ = r / 2.355
    ===================================================================== */
 
-// Stage widths for an exact chained area reduce sw -> dw. Every intermediate is
-// an integer multiple of dw, so no intermediate texel ever straddles a final
-// bin boundary and the chain equals the direct box filter; every stage ratio is
-// <= 64 (nw <= cw/64 + dw < cw whenever cw > 64*dw). The old rule, ceil(cw/64),
-// was exact per stage but not for the chain: a 130 -> 3 -> 2 reduce split an
-// impulse that belongs to one output bin almost equally across both (Codex
-// pixel-simulation audit, 2026-09-06). Top-level and pure so the Node oracle in
-// tools/test-reduce-stages-node.js can lift it out of this file.
-function reduceStages(sw, dw){ const out=[]; let cw=sw;
-  while(cw>dw){ cw=Math.max(dw, dw*Math.ceil(cw/(64*dw))); out.push(cw); } return out; }
-
-// The native LED field is held in full -- every LED quantised individually --
-// up to these limits. Beyond them the crop is decimated BEFORE quantisation and
-// every readout and the export caption say so (decimNote): quantise(mean) is
-// not mean(quantise), and at 8-bit / 5% drive the difference is 2x on dark
-// codes. Sized so every shipped 12x6 preset (<= 43 MB RGBA16F) and a 24x24 of
-// 600x337.5 (5544x3119, 138 MB) run at native on a desktop GPU. The old
-// CROP_CAP of 4096 decimated exactly at the sizes where it hurt, and round 1's
-// "decim>1 only when cell<1, where the grid is invisible" was true but never
-// checked in the converse (Codex pixel-simulation audit, 2026-09-06).
-let   NATIVE_CAP    = 8192;              // max native-crop buffer edge, in px (probe() lowers it to test the fallback)
-const NATIVE_TEXELS = 24e6;              // max native-crop buffer area, in px
-function setNativeCap(n){ const was=NATIVE_CAP; NATIVE_CAP=Math.max(64,n|0); return was; }
-function decimNote(decim){ return decim>1
-  ? ` · LED grid averaged ${decim}:1 BEFORE quantisation — wall exceeds the native buffer; dark-grade banding and LED structure are approximate at this size`
-  : ''; }
-// Every way a frame can be less than the exact simulation, in one string, so
-// the readout and the export caption cannot disagree about it.
-function frameNote(geo){ if(!geo) return '';
-  return (geo.failed ? ' · ⚠ GPU refused this wall at this size — nothing shown is simulated' : '')
-       + decimNote(geo.decim)
-       + (geo.coarse ? ' · zoomed out beyond 128 LEDs per screen pixel — LED field averaged in two stages (≤ 3% at pixel edges)' : ''); }
+const CROP_CAP   = 4096;                 // max native-crop buffer edge, in px
 // (A canvas-2D `filter` probe used to live here, from when 2D carried the
 // acuity model. The GL rewrite made it dead, but it still READ like a live
 // capability gate — the one thing a fossil must never do in a file whose whole
@@ -753,20 +722,8 @@ const GLE = (()=>{
   // a texel spans ceil(frac(s0)+r) = 65 of them, and stopping at 64 dropped the
   // trailing sliver out of both the sum AND wsum -- renormalising as though it
   // did not exist, which is exactly the "true overlap weight" claim failing.
-  // uS0 / uRatio: an explicit bin origin (source texels, fractional) and bin
-  // width. Zero = derive from uSrc/uDst as before. reduceTo() sets them so the
-  // minified composite's bins start exactly where each screen pixel starts.
-  const FS_REDUCE = F(`uniform vec2 uSrc, uDst, uS0, uRatio; uniform int uAxis, uNearest;
-    uniform float uLit;
+  const FS_REDUCE = F(`uniform vec2 uSrc, uDst; uniform int uAxis, uNearest;
     `+OVB+`
-    // Overlap weight of source texel x with the bin [s0,s1): geometric, or --
-    // when uLit>0 -- only the LIT part of the texel (a centred square of side
-    // uLit), so the reduce integrates value x lit-area mask JOINTLY. Multiplying
-    // mean(value) by mean(mask) instead lit up slivers of an LED that lie
-    // outside its lit square: 92 sRGB codes of error at 1.1 LEDs per pixel.
-    float ov(float x,float s0,float s1){
-      if(uLit>0.0){ float lo=(1.0-uLit)*0.5; return max(0.0, min(x+lo+uLit,s1)-max(x+lo,s0)); }
-      return min(x+1.0,s1)-max(x,s0); }
     void main(){
       vec2 d=floor(vUV*uDst);
       if(uNearest==1){
@@ -775,37 +732,23 @@ const GLE = (()=>{
         ivec2 p=ivec2(floor((d+0.5)*(uSrc/uDst)));
         p=clamp(p,ivec2(0),ivec2(uSrc)-ivec2(1));
         oCol=vec4(ovb(texelFetch(uTex,p,0)),1.0); return; }
-      // 129 taps: boxTo's stages stay <= 64:1, but a fragment-aligned bin
-      // (uRatio) can span up to 128 LED texels -- eye-match at 200 m on a fine
-      // pitch -- and the loop breaks early, so the extra taps cost nothing
-      // in the ordinary case. Taps OUTSIDE the source count as dark, never as
-      // the clamped edge texel: a bin that starts before LED 0 or ends past
-      // the last LED is looking at the wall's surround, and the surround is
-      // not lit. (Ordinary reductions never place a tap outside.)
-      vec3 acc=vec3(0.0); float wsum=0.0, r=0.0, s0=0.0, s1=0.0;
+      vec3 acc=vec3(0.0); float wsum=0.0;
       if(uAxis==0){
-        r=uRatio.x>0.0?uRatio.x:uSrc.x/uDst.x; s0=uS0.x+d.x*r; s1=s0+r;
+        float r=uSrc.x/uDst.x, s0=d.x*r, s1=(d.x+1.0)*r;
         float y=(d.y+0.5)/uSrc.y;
-        for(int i=0;i<129;i++){
+        for(int i=0;i<65;i++){
           float x=floor(s0)+float(i); if(x>=s1) break;
-          if(x<0.0||x>=uSrc.x) continue;
-          float w=ov(x,s0,s1); if(w<=0.0) continue;
+          float w=min(x+1.0,s1)-max(x,s0); if(w<=0.0) continue;
           acc+=ovb(texture(uTex,vec2((x+0.5)/uSrc.x,y)))*w; wsum+=w; }
       } else {
-        r=uRatio.y>0.0?uRatio.y:uSrc.y/uDst.y; s0=uS0.y+d.y*r; s1=s0+r;
+        float r=uSrc.y/uDst.y, s0=d.y*r, s1=(d.y+1.0)*r;
         float x=(d.x+0.5)/uSrc.x;
-        for(int i=0;i<129;i++){
+        for(int i=0;i<65;i++){
           float y=floor(s0)+float(i); if(y>=s1) break;
-          if(y<0.0||y>=uSrc.y) continue;
-          float w=ov(y,s0,s1); if(w<=0.0) continue;
+          float w=min(y+1.0,s1)-max(y,s0); if(w<=0.0) continue;
           acc+=ovb(texture(uTex,vec2(x,(y+0.5)/uSrc.y)))*w; wsum+=w; }
       }
-      // Fragment-aligned (uRatio) or lit-weighted: normalise by the whole
-      // footprint, not by the surviving weight sum -- the unlit part of a
-      // footprint and the part outside the wall are dark, which is the point.
-      // Ordinary reductions keep wsum (== r; byte-identical to before).
-      bool fa = uRatio.x>0.0 || uRatio.y>0.0;
-      oCol=vec4(acc/max((uLit>0.0 || fa) ? r : wsum, 1e-6),1.0); }`);
+      oCol=vec4(acc/max(wsum,1e-6),1.0); }`);
 
   // plain resize for magnification (wall out-resolves the content)
   const FS_COPY = F(`uniform int uNearest; uniform vec2 uSrc, uDst;
@@ -815,20 +758,7 @@ const GLE = (()=>{
         ivec2 p=ivec2(floor((floor(vUV*uDst)+0.5)*(uSrc/uDst)));
         p=clamp(p,ivec2(0),ivec2(uSrc)-ivec2(1));
         oCol=vec4(ovb(texelFetch(uTex,p,0)),1.0); return; }
-      // Premultiply EACH texel over black in linear light, THEN interpolate.
-      // Hardware LINEAR blends straight RGB and A separately, so a transparent
-      // texel's hidden colour leaked into its opaque neighbour and the
-      // neighbour darkened (round 3's ovb() sat after the filter; this puts it
-      // before). Manual bilinear with the sampler's own conventions: texel
-      // centres at +0.5, clamp to edge. For an opaque source it is the same
-      // filter to within the sampler's fixed-point weights.
-      vec2 p=vUV*uSrc-0.5; vec2 f=fract(p);
-      ivec2 i0=ivec2(floor(p)), mx=ivec2(uSrc)-ivec2(1);
-      vec3 c00=ovb(texelFetch(uTex,clamp(i0,ivec2(0),mx),0));
-      vec3 c10=ovb(texelFetch(uTex,clamp(i0+ivec2(1,0),ivec2(0),mx),0));
-      vec3 c01=ovb(texelFetch(uTex,clamp(i0+ivec2(0,1),ivec2(0),mx),0));
-      vec3 c11=ovb(texelFetch(uTex,clamp(i0+ivec2(1,1),ivec2(0),mx),0));
-      oCol=vec4(mix(mix(c00,c10,f.x),mix(c01,c11,f.x),f.y),1.0); }`);
+      oCol=vec4(ovb(texture(uTex,vUV)),1.0); }`);
 
   // place the resampled content into the LED crop, black outside the content
   const FS_PLACE = F(`uniform vec2 uLedSize, uCropOrigin; uniform float uDecim;
@@ -840,9 +770,6 @@ const GLE = (()=>{
       // Half-open: accepting BOTH 0.0 and 1.0 let clamp-to-edge duplicate the
       // last row and column, so an N-pixel 1:1 extent could light N+1 LEDs.
       if(uv.x<0.0||uv.y<0.0||uv.x>=1.0||uv.y>=1.0){ oCol=vec4(0,0,0,1); return; }
-      // uTex is a boxTo() output: alpha 1 by construction, so a plain LINEAR tap
-      // is safe here. Straight-alpha sources only ever enter through FS_REDUCE
-      // (texel-centred taps) and FS_COPY (premultiplied per tap) above.
       oCol=vec4(texture(uTex,uv).rgb,1.0); }`);
 
   // bit depth / PWM: quantise in the SIGNAL domain, which is what produces
@@ -898,22 +825,12 @@ const GLE = (()=>{
             if(m>=uScrNx){ oCol=vec4(0.0,0.0,0.0,1.0); return; }
             localX=m;                                  // position within a screen
           }
-          // uTex holds >= 1 texel per fragment: the quantised LED field when
-          // magnified, its fragment-aligned reduce (renderView 3b) when
-          // minified -- so this single NEAREST tap is the footprint integral
-          // (of value x lit mask when the grid is on: uGrid==2 below).
-          // Still point-evaluated at cell<1: the cabinet index for tile
-          // variance and the array-gap test -- a <= 1 px effect at boundaries.
           vec2 uv=((wall-uCropOrigin)/uDecim)/uLedSize;
           col=texture(uTex,uv).rgb;
           if(uGrid==1){
             float s=sqrt(uFill);
             vec2 w=1.0/uCell;
             col*=cov1(wall.x,w.x,s)*cov1(wall.y,w.y,s)*uGain;
-          } else if(uGrid==2){
-            // minified with the grid on: the lit-area mask was folded into the
-            // fragment-aligned reduce (value x mask, jointly); only the gain remains
-            col*=uGain;
           }
           // Cabinet-to-cabinet brightness spread. Cabinets are indexed within
           // their own screen (that is how they are physically laid out), but
@@ -983,11 +900,7 @@ const GLE = (()=>{
     return {t,w,h}; }
   const pool=[];
   function grab(w,h,nearest){
-    w=Math.max(1,Math.round(w)); h=Math.max(1,Math.round(h));
-    // Never clamp silently: a capped texture standing in for a different grid
-    // is a wrong answer wearing the right caption. renderView catches this and
-    // refuses the frame.
-    if(w>MAXTEX||h>MAXTEX) throw new Error('texture '+w+'x'+h+' exceeds MAX_TEXTURE_SIZE '+MAXTEX);
+    w=Math.max(1,Math.min(MAXTEX,Math.round(w))); h=Math.max(1,Math.min(MAXTEX,Math.round(h)));
     for(let i=0;i<pool.length;i++){ const e=pool[i];
       if(e.w===w&&e.h===h&&e.n===!!nearest){ pool.splice(i,1); return e; } }
     const e=tex(w,h,nearest); e.n=!!nearest; e.fb=gl.createFramebuffer();
@@ -1009,9 +922,7 @@ const GLE = (()=>{
   // permanently defeating itself while still pinning ~24 dead buffers. Evict
   // oldest-first instead, on a byte budget as well as a count, so the pool
   // tracks the current working set rather than the first sizes it ever saw.
-  // 512 MiB: two full-native fields (A/B mode, 138 MB each at 5544x3119) plus
-  // the scene buffers must co-reside or every pan thrashes a 138 MB texture.
-  const POOL_MAX=24, POOL_BYTES=512*1024*1024;   // RGBA16F = 8 bytes/px
+  const POOL_MAX=24, POOL_BYTES=384*1024*1024;   // RGBA16F = 8 bytes/px
   function poolBytes(){ let s=0; for(const e of pool) s+=e.w*e.h*8; return s; }
   function evict(){ const o=pool.shift();
     gl.deleteFramebuffer(o.fb); gl.deleteTexture(o.t); }
@@ -1065,51 +976,23 @@ const GLE = (()=>{
       const out=grab(nw,nh,false);
       const scw=cw, sch=ch;
       pass(P.reduce,cur,out,u=>{ gl.uniform2f(u.uSrc,scw,sch); gl.uniform2f(u.uDst,nw,nh);
-                                 gl.uniform1i(u.uAxis,axis); gl.uniform1i(u.uNearest,0);
-                                 gl.uniform2f(u.uS0,0,0); gl.uniform2f(u.uRatio,0,0);
-                                 gl.uniform1f(u.uLit,0); });
+                                 gl.uniform1i(u.uAxis,axis); gl.uniform1i(u.uNearest,0); });
       give(owned); owned=out; cur=out.t; cw=nw; ch=nh;
     };
-    // Exception-safe: a grab() that throws (texture over MAX_TEXTURE_SIZE)
-    // must not strand the intermediate this call already holds.
-    try{
-      if(!nearest){
-        for(const nw of reduceStages(cw,dw)) step(nw, ch, 0);
-        for(const nh of reduceStages(ch,dh)) step(cw, nh, 1);
-      }
-      // Final resize. The filter matters when this texture is later MAGNIFIED --
-      // e.g. a processor feed smaller than the wall being scaled up to it. A real
-      // scaler interpolates, so leave it LINEAR unless the cheap path is chosen;
-      // NEAREST here would point-replicate and keep edges artificially crisp.
-      const out=grab(dw,dh,!!nearest);
-      const fcw=cw, fch=ch;
-      pass(P.copy,cur,out,u=>{ gl.uniform2f(u.uSrc,fcw,fch); gl.uniform2f(u.uDst,dw,dh);
-                               gl.uniform1i(u.uNearest,nearest?1:0); });
-      give(owned);
-      return out;
-    }catch(e){ give(owned); throw e; } }
-
-  // Fragment-aligned exact area reduce, for the minified composite: bins start
-  // at (s0x,s0y) source texels -- fractional -- and are exactly rx / ry texels
-  // wide, so output texel j is the true average over precisely the source span
-  // under screen pixel j. One stage per axis; callers keep the ratio <= 64.
-  // lit > 0 folds the lit-area mask (a centred square of side lit = sqrt(fill))
-  // into the weights, so the result is the exact footprint integral of
-  // value x mask; the composite then applies only the 1/fill gain.
-  function reduceTo(inTex, sw, sh, dw, dh, s0x, s0y, rx, ry, outNearest, lit){
-    dw=Math.max(1,Math.round(dw)); dh=Math.max(1,Math.round(dh));
-    const mid=grab(dw,sh,false);
-    try{
-      pass(P.reduce,inTex,mid,u=>{ gl.uniform2f(u.uSrc,sw,sh); gl.uniform2f(u.uDst,dw,sh);
-        gl.uniform1i(u.uAxis,0); gl.uniform1i(u.uNearest,0);
-        gl.uniform2f(u.uS0,s0x,0); gl.uniform2f(u.uRatio,rx,0); gl.uniform1f(u.uLit,lit||0); });
-      const out=grab(dw,dh,!!outNearest);
-      pass(P.reduce,mid.t,out,u=>{ gl.uniform2f(u.uSrc,dw,sh); gl.uniform2f(u.uDst,dw,dh);
-        gl.uniform1i(u.uAxis,1); gl.uniform1i(u.uNearest,0);
-        gl.uniform2f(u.uS0,0,s0y); gl.uniform2f(u.uRatio,0,ry); gl.uniform1f(u.uLit,lit||0); });
-      give(mid);
-      return out;
-    }catch(e){ give(mid); throw e; } }
+    if(!nearest){
+      while(cw>dw) step(Math.max(dw,Math.ceil(cw/64)), ch, 0);
+      while(ch>dh) step(cw, Math.max(dh,Math.ceil(ch/64)), 1);
+    }
+    // Final resize. The filter matters when this texture is later MAGNIFIED --
+    // e.g. a processor feed smaller than the wall being scaled up to it. A real
+    // scaler interpolates, so leave it LINEAR unless the cheap path is chosen;
+    // NEAREST here would point-replicate and keep edges artificially crisp.
+    const out=grab(dw,dh,!!nearest);
+    const fcw=cw, fch=ch;
+    pass(P.copy,cur,out,u=>{ gl.uniform2f(u.uSrc,fcw,fch); gl.uniform2f(u.uDst,dw,dh);
+                             gl.uniform1i(u.uNearest,nearest?1:0); });
+    give(owned);
+    return out; }
 
   // Context loss invalidates every program, texture and framebuffer. Carrying
   // on would render stale or black pixels while still claiming to simulate.
@@ -1125,7 +1008,7 @@ const GLE = (()=>{
     },false);
   }
 
-  return {cv, gl, live, fail, MAXTEX, P, pass, grab, give, boxTo, reduceTo, poolBytes, uploadSource,
+  return {cv, gl, live, fail, MAXTEX, P, pass, grab, give, boxTo, uploadSource,
           invalidateSource, get lost(){return lost;},
           get width(){return cv.width;}, get height(){return cv.height;},
           size(w,h){ if(cv.width!==w) cv.width=w; if(cv.height!==h) cv.height=h; }};
@@ -1208,18 +1091,10 @@ function renderView(cv, pitch, ideal, dims){
   // Shift right by half the reserved margin so the slack lands on the figure's
   // side rather than being split evenly and leaving it clipped.
   const ox=(VW-dw)/2 + figMargin()*VW/2 + S.panX*dpr, oy=(VH-dh)/2 + S.panY*dpr;
-  let decim=1;                                  // >1 = native buffer decimated (memory fallback)
-  let dispReduce=false;                         // minified: LED field box-averaged onto fragments
-  let coarse=false;                             // > 128 LED texels per fragment: two-stage average
-  let failed=false;                             // GPU refused an allocation; nothing simulated
+  let decim=1;                                  // >1 = native buffer decimated
   let gridDrawn=false;                          // were physical gaps actually drawn?
 
   const gl=GLE.gl;
-  // Every texture this frame checks out, so a refusal mid-frame returns them
-  // to the pool instead of stranding them (Codex render review, finding 5).
-  const held=new Set();
-  const take=(t)=>{ if(t) held.add(t); return t; };
-  const rel=(t)=>{ if(!t) return; held.delete(t); GLE.give(t); };
   GLE.size(VW,VH);
   const r=contentRect(nx,ny);
 
@@ -1234,7 +1109,6 @@ function renderView(cv, pitch, ideal, dims){
   const amb  = ambientFraction();
   const offGain = offAxisGain();
 
-  try{
   if(S.src){
     const srcT = GLE.uploadSource(S.src, S.srcW, S.srcH, S.isVideo?'':(S.name+S.srcW+S.srcH));
     // Refuse rather than draw: the alternative is the previous file's pixels
@@ -1252,8 +1126,8 @@ function renderView(cv, pitch, ideal, dims){
       // what the pitch costs.
       const cwpx=Math.max(1,Math.min(GLE.MAXTEX,Math.round(r.w*cell)));
       const chpx=Math.max(1,Math.min(GLE.MAXTEX,Math.round(r.h*cell)));
-      const content=take(GLE.boxTo(srcT,S.srcW,S.srcH,cwpx,chpx,false));
-      scene=take(GLE.grab(VW,VH,false));
+      const content=GLE.boxTo(srcT,S.srcW,S.srcH,cwpx,chpx,false);
+      scene=GLE.grab(VW,VH,false);
       GLE.pass(GLE.P.comp, content.t, scene, u=>{
         gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,content.t);
         gl.uniform1i(u.uContent,1);
@@ -1268,13 +1142,13 @@ function renderView(cv, pitch, ideal, dims){
         // neutral, or the ideal reference would inherit the last view's array
         gl.uniform1f(u.uArrPitch,0); gl.uniform1f(u.uScrNx,nx); gl.uniform1f(u.uGapPx,0);
         gl.uniform2f(u.uCabPx,1,1); gl.uniform1f(u.uTileVar,0); });
-      rel(content);
+      GLE.give(content);
     } else {
       const x0=clamp(Math.floor(-ox/cell),0,nx), y0=clamp(Math.floor(-oy/cell),0,ny);
       const x1=clamp(Math.ceil((VW-ox)/cell),0,nx), y1=clamp(Math.ceil((VH-oy)/cell),0,ny);
       const cw=Math.max(1,x1-x0), ch=Math.max(1,y1-y0);
-      const capTex=Math.min(NATIVE_CAP,GLE.MAXTEX);
-      decim=Math.max(1, Math.ceil(Math.max(cw,ch)/capTex), Math.ceil(Math.sqrt(cw*ch/NATIVE_TEXELS)));
+      const capTex=Math.min(CROP_CAP,GLE.MAXTEX);
+      decim=Math.max(1,Math.ceil(Math.max(cw,ch)/capTex));
       // ceil, so a crop that is not a multiple of decim still has a texel
       // covering its final partial group instead of sampling past the crop
       const lw=Math.max(1,Math.ceil(cw/decim)), lh=Math.max(1,Math.ceil(ch/decim));
@@ -1295,86 +1169,43 @@ function renderView(cv, pitch, ideal, dims){
       if(S.procOn && (S.procW<nx || S.procH<ny)){
         const pw=Math.max(1,Math.round(r.w*Math.min(1,S.procW/nx))),
               ph=Math.max(1,Math.round(r.h*Math.min(1,S.procH/ny)));
-        const stage1=take(GLE.boxTo(srcT,S.srcW,S.srcH,pw,ph,S.scaler==='cheap'));
-        content=take(GLE.boxTo(stage1.t,stage1.w,stage1.h,tgtW,tgtH,S.scaler==='cheap'));
-        rel(stage1);
+        const stage1=GLE.boxTo(srcT,S.srcW,S.srcH,pw,ph,S.scaler==='cheap');
+        content=GLE.boxTo(stage1.t,stage1.w,stage1.h,tgtW,tgtH,S.scaler==='cheap');
+        GLE.give(stage1);
       } else {
-        content=take(GLE.boxTo(srcT,S.srcW,S.srcH,tgtW,tgtH,S.scaler==='cheap'));
+        content=GLE.boxTo(srcT,S.srcW,S.srcH,tgtW,tgtH,S.scaler==='cheap');
       }
       // 2. place it into the LED crop (black outside the content)
-      let led=take(GLE.grab(lw,lh,true));
+      let led=GLE.grab(lw,lh,true);
       GLE.pass(GLE.P.place, content.t, led, u=>{
         gl.uniform2f(u.uLedSize,lw,lh);
         gl.uniform2f(u.uCropOrigin,x0,y0);
         gl.uniform1f(u.uDecim,decim);
         gl.uniform4f(u.uRect,r.x,r.y,r.w,r.h); });
-      rel(content);
+      GLE.give(content);
       // 3. bit depth / PWM quantisation, in the signal domain
       if(S.bits<16){
         // An integer maximum code, not a fractional one: a real chain has a
         // whole number of steps, and 2^bits*drive-1 is fractional for most
         // drive levels (8-bit at 20% gave 50.2).
         const levels=Math.max(1,Math.floor((Math.pow(2,S.bits)-1)*Math.max(0.02,S.wallBright)));
-        const q=take(GLE.grab(lw,lh,true));
+        const q=GLE.grab(lw,lh,true);
         GLE.pass(GLE.P.quant, led.t, q, u=>gl.uniform1f(u.uLevels,levels));
-        rel(led); led=q;
-      }
-      // 3b. Minified -- more than one LED under each screen pixel. Box-average
-      //     the QUANTISED field over each fragment's exact footprint, with bins
-      //     aligned to fragment edges, so the composite reads one texel per
-      //     fragment with no phase error. Point-sampling one LED here aliased
-      //     LED-scale detail to black or white by pan phase, including in the
-      //     exported PNG (Codex audit, 2026-09-06, finding 1). cov1 in FS_COMP
-      //     integrates the lit-area mask over the same footprint, so the
-      //     composite's maths is unchanged. The reduce is one stage per axis,
-      //     so it needs <= 64 LED texels per fragment; below that the tool
-      //     falls back to the point sample (a canvas under ~128 px wide).
-      let sampled=led, sW=lw, sH=lh, sOx=x0, sOy=y0, sDecim=decim;
-      const per=1/(cell*decim);                       // q texels under one fragment
-      if(cell<1){
-        // Include the PARTIAL leading fragment: its centre can sit inside the
-        // wall while its footprint starts outside it, and the reduce counts the
-        // outside as dark (Codex render review, finding 1).
-        const xs0=Math.max(0,Math.floor(ox)), ys0=Math.max(0,Math.floor(oy));
-        const xs1=Math.min(VW,Math.ceil(ox+x1*cell)), ys1=Math.min(VH,Math.ceil(oy+y1*cell));
-        const dispW=Math.max(1,xs1-xs0), dispH=Math.max(1,ys1-ys0);
-        const xw0=(xs0-ox)/cell, yw0=(ys0-oy)/cell;   // LED-space origin of fragment (xs0,ys0); may precede x0
-        // With the grid on, the lit-area mask rides INSIDE the reduce (value x
-        // mask integrated jointly per LED); the composite then applies only
-        // the 1/fill gain (uGrid==2). mean(value) x mean(mask) was 92 codes
-        // wrong at 1.1 LEDs per pixel. Native resolution only: in the memory
-        // fallback a q texel spans `decim` LEDs, so a per-texel mask would have
-        // the wrong period -- the fallback keeps cov1 in the composite and
-        // decimNote says the structure is approximate (review finding 3).
-        const lit = (S.grid && decim===1) ? Math.sqrt(S.fill) : 0;
-        if(per<=128){
-          sampled=take(GLE.reduceTo(led.t, lw, lh, dispW, dispH, (xw0-x0)/decim, (yw0-y0)/decim, per, per, true, lit));
-        } else {
-          // Beyond 128 LED texels per fragment (eye-match past ~200 m on a
-          // sub-millimetre pitch): an exact integer m:1 stage, lit-weighted,
-          // then the fragment-aligned stage. A stage-1 texel can straddle a
-          // fragment edge, so this is within ~2m/per <= 3% at edges, and
-          // frameNote says so in the readout and the export caption.
-          const m=Math.ceil(per/128), pw2=Math.ceil(lw/m), ph2=Math.ceil(lh/m);
-          const pre=take(GLE.reduceTo(led.t, lw, lh, pw2, ph2, 0, 0, m, m, false, lit));
-          sampled=take(GLE.reduceTo(pre.t, pw2, ph2, dispW, dispH, (xw0-x0)/(decim*m), (yw0-y0)/(decim*m), per/m, per/m, true, 0));
-          rel(pre); coarse=true;
-        }
-        sW=dispW; sH=dispH; sOx=xw0; sOy=yw0; sDecim=1/cell; dispReduce=true;
+        GLE.give(led); led=q;
       }
       // 4. composite to screen with analytic fill coverage
-      scene=take(GLE.grab(VW,VH,false));
-      GLE.pass(GLE.P.comp, sampled.t, scene, u=>{
-        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,sampled.t);
+      scene=GLE.grab(VW,VH,false);
+      GLE.pass(GLE.P.comp, led.t, scene, u=>{
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,led.t);
         gl.uniform1i(u.uContent,1);
         gl.uniform2f(u.uView,VW,VH); gl.uniform2f(u.uOrigin,ox,oy);
         gl.uniform2f(u.uCell,cell,cell); gl.uniform2f(u.uNative,nx,ny);
-        gl.uniform2f(u.uLedSize,sW,sH); gl.uniform2f(u.uCropOrigin,sOx,sOy);
+        gl.uniform2f(u.uLedSize,lw,lh); gl.uniform2f(u.uCropOrigin,x0,y0);
         gl.uniform4f(u.uRect,r.x,r.y,r.w,r.h);
-        gl.uniform1f(u.uDecim,sDecim); gl.uniform1f(u.uFill,S.fill);
+        gl.uniform1f(u.uDecim,decim); gl.uniform1f(u.uFill,S.fill);
         gl.uniform1f(u.uGain,1/Math.max(.05,S.fill)); gl.uniform1f(u.uAmb,amb);
         gl.uniform1f(u.uOffGain,offGain);
-        gl.uniform1i(u.uIdeal,0); gl.uniform1i(u.uGrid, S.grid ? ((dispReduce&&decim===1)?2:1) : 0);
+        gl.uniform1i(u.uIdeal,0); gl.uniform1i(u.uGrid,S.grid?1:0);
         const sr=screenRes(pitch), gp=gapPx(pitch);
         gl.uniform1f(u.uArrPitch, S.arrayOn ? sr.nx+gp : 0);
         gl.uniform1f(u.uScrNx,    sr.nx);
@@ -1383,8 +1214,7 @@ function renderView(cv, pitch, ideal, dims){
         const cpy = S.wallMode==='cab' ? cabPxY() : cpx;
         gl.uniform2f(u.uCabPx, cpx, cpy);
         gl.uniform1f(u.uTileVar, S.tileVar); });
-      if(sampled!==led) rel(sampled);
-      rel(led);
+      GLE.give(led);
       gridDrawn=S.grid;
     }
 
@@ -1399,36 +1229,25 @@ function renderView(cv, pitch, ideal, dims){
         // under-blurred, because the kernel radius is capped too.
         const kf=Math.max(1,Math.min(Math.floor(Math.min(VW,VH)/8), Math.ceil(sig/8)));
         sw=Math.max(8,Math.round(VW/kf)); sh=Math.max(8,Math.round(VH/kf));
-        shrunk=take(GLE.boxTo(scene.t,VW,VH,sw,sh,false));
+        shrunk=GLE.boxTo(scene.t,VW,VH,sw,sh,false);
         work=shrunk; sig=sig/kf;
       }
       const rad=Math.min(96,Math.ceil(3*sig));
-      const h1=take(GLE.grab(work.w,work.h,true));
+      const h1=GLE.grab(work.w,work.h,true);
       GLE.pass(GLE.P.blur, work.t, h1, u=>{ gl.uniform2f(u.uDir,1/work.w,0);
         gl.uniform1f(u.uSigma,sig); gl.uniform1i(u.uRadius,rad); });
-      const h2=take(GLE.grab(work.w,work.h,false));
+      const h2=GLE.grab(work.w,work.h,false);
       GLE.pass(GLE.P.blur, h1.t, h2, u=>{ gl.uniform2f(u.uDir,0,1/work.h);
         gl.uniform1f(u.uSigma,sig); gl.uniform1i(u.uRadius,rad); });
-      rel(h1); rel(shrunk); rel(scene);
+      GLE.give(h1); GLE.give(shrunk); GLE.give(scene);
       scene=h2;
     }
     // 6. encode to sRGB and present
     GLE.pass(GLE.P.present, scene.t, null);
-    rel(scene);
+    GLE.give(scene);
   } else {
     gl.bindFramebuffer(gl.FRAMEBUFFER,null);
     gl.viewport(0,0,VW,VH); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
-  }
-  }catch(err){
-    // An allocation this GPU cannot make (grab() no longer clamps). Refuse in
-    // the frame rather than render a different grid under the same caption;
-    // the readout says so and both exports check the flag.
-    failed=true;
-    for(const t of held) GLE.give(t);
-    held.clear();
-    gl.bindFramebuffer(gl.FRAMEBUFFER,null);
-    gl.viewport(0,0,VW,VH); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
-    toast('GPU could not hold this wall at this size — zoom in or reduce the wall ('+err.message+')');
   }
 
   const c=cv.getContext('2d');
@@ -1442,7 +1261,7 @@ function renderView(cv, pitch, ideal, dims){
   // what someone looks like standing there", which the tool cannot back.
   if(S.cabGrid && !ideal) drawCabGrid(c,ox,oy,cell,pitch,nx,ny,VW,VH);
   const figVisible = S.figure ? drawFigure(c,ox,oy,cell,pitch,nx,ny,VW,VH) : true;
-  return {cell,nx,ny,ox,oy,sTarget,sMon,decim,dispReduce,coarse,failed,gridDrawn,amb,figVisible};
+  return {cell,nx,ny,ox,oy,sTarget,sMon,decim,gridDrawn,amb,figVisible};
 }
 
 /* Where the wall physically breaks. Diagnostic chrome, not a simulated seam:
@@ -1522,7 +1341,7 @@ function offAxisGain(){
   return Math.pow(Math.max(0,Math.cos(t)), 1.35);
 }
 
-let geoA=null, geoB=null, geoI=null;   // geoI = the wipe mode's ideal reference render
+let geoA=null, geoB=null;
 // Which view is under the pointer? In A/B the two canvases have DIFFERENT cell
 // sizes and pitches, so measuring or zooming over B while using A's geometry
 // silently reports the wrong wall-pixel count.
@@ -1540,7 +1359,7 @@ function draw(){
   $('wipeBar').style.display = wipe?'block':'none';
 
   geoA = renderView($('cvA'), S.pitchA, false);
-  geoB = null; geoI = null;
+  geoB = null;
 
   if(ab){
     geoB = renderView($('cvB'), S.pitchB, false);
@@ -1550,7 +1369,7 @@ function draw(){
   } else if(wipe){
     // Left of the bar = the ideal source; right = the real wall (already in cvA).
     const cv=$('cvA');
-    geoI = renderView(idealCv, S.pitchA, true, {w:cv.width,h:cv.height});
+    renderView(idealCv, S.pitchA, true, {w:cv.width,h:cv.height});
     const c=cv.getContext('2d');
     const xw=Math.round(cv.width*S.wipe);
     c.save(); c.beginPath(); c.rect(0,0,xw,cv.height); c.clip();
@@ -1655,7 +1474,8 @@ function updateReadout(){
     // The gap is now computed as analytic sub-pixel coverage, so there is no
     // threshold below which it silently disappears — it fades continuously and
     // converges to the fill factor, which is what physically happens.
-    txt += frameNote(geoA);
+    if(geoA.decim>1)
+      txt += ` · LED grid box-averaged ${geoA.decim}:1 (exact: several LEDs fall inside one screen pixel)`;
     if(S.figure && geoA.figVisible===false) txt += ` · scale figure out of frame`;
     // Near-unity resampling is where real walls shimmer.
     if(S.src){
@@ -2058,22 +1878,8 @@ function composeExport(btn){
   if(S.wallMode==='cab' && cab().custom && cabRowsRes().res>0.1)
     return toast('Custom cabinet height is not a whole number of LEDs — fix the datasheet numbers before exporting');
   const a=$('cvA'), ab=S.mode==='ab', wipe=S.mode==='wipe';
-  // Every panel that lands in the PNG is checked, not just A: B renders on
-  // its own pitch and can fail or decimate alone; the wipe's reference has
-  // its own geo (Codex render review, finding 4).
-  const panels=[['',geoA],['B: ',ab?geoB:null],['reference: ',wipe?geoI:null]].filter(p=>p[1]);
-  if(panels.some(p=>p[1].failed)) return toast('Nothing to export — the GPU refused this wall at this size');
-  // Approximation notes get their own wrapped lines in the caption strip, so
-  // they can never be clipped off the end of the settings line (finding 7).
-  const noteTxt=panels.map(([pfx,g])=>frameNote(g).replace(/ · /g,' · '+pfx)).join('').replace(/^ · /,'');
   const b=$('cvB');
-  const W=ab?a.width+b.width+8:a.width;
-  const mc=mk().getContext('2d'); mc.font='15px Consolas, monospace';
-  const noteLines=[]; if(noteTxt){ let line='';
-    for(const word of noteTxt.split(' ')){ const tryL=line?line+' '+word:word;
-      if(mc.measureText(tryL).width>W-140 && line){ noteLines.push(line); line=word; } else line=tryL; }
-    if(line) noteLines.push(line); }
-  const H=a.height+124+(noteLines.length?8+20*noteLines.length:0);
+  const W=ab?a.width+b.width+8:a.width, H=a.height+124;
   const out=mk(); out.width=W; out.height=H;
   const c=out.getContext('2d');
   c.fillStyle='#0e1013'; c.fillRect(0,0,W,H);
@@ -2141,10 +1947,6 @@ function composeExport(btn){
                 : `manual wash ${(S.ambient*100)|0}%`}`+
              ` · contrast ≈ ${cr===Infinity?'∞':Math.round(cr)}:1 · ${S.offAxis}° off-axis`+
              ` · linear-light GPU render · audience acuity baked in`, 120, a.height+110);
-  if(noteLines.length){
-    c.fillStyle='#ff9f1c'; c.font='15px Consolas, monospace';
-    noteLines.forEach((l,i)=>c.fillText('⚠ '+l, 120, a.height+134+20*i));
-  }
 
   const restore=()=>{ btn.textContent='Save comparison PNG'; btn.disabled=false; };
   if(!out.toBlob){ restore(); return toast('This browser cannot export PNG'); }
@@ -2167,8 +1969,7 @@ window.SQUINT = { S, nativeRes, contentRect, cellPx, draw, ppmmDev, viewUnder,
                   effectiveNits, blackFraction, spanW,
                   CABS, cab, cabPitch, cabPxY, cabMMY, cabRowsRes, cabTileTxt, cabRefresh,
                   syncFromCabinets, screenRes,
-                  effectiveRes, gapPx, syncPlan, exportTemplate,
-                  renderView, probe, setNativeCap, decimNote, frameNote, reduceStages };
+                  effectiveRes, gapPx, syncPlan, exportTemplate };
 
 /* ---------- build plan ----------
    The answer to "what size do I build the comp?", stated before the job starts
@@ -2211,7 +2012,6 @@ function exportTemplate(){
   const n=S.arrayOn?Math.max(2,S.arrayN|0):1, gp=gapPx(pitch);
   if(S.wallMode==='cab' && cab().custom && cabRowsRes().res>0.1)
     return toast('Custom cabinet height is not a whole number of LEDs — fix the datasheet numbers before exporting');
-  if(geoA && geoA.failed) return toast('Nothing to export — the GPU refused this wall at this size');
   if(nx*ny>80e6) return toast('Native grid too large to write a guide');
   const cvT=mk(); cvT.width=nx; cvT.height=ny;
   const c=cvT.getContext('2d');
@@ -2342,220 +2142,48 @@ function meanOf(cv){
   let s=0,n=0; for(let i=0;i<d.length;i+=40){s+=d[i];n++;} return s/n;
 }
 
-/* ---------- render probe (NOT run at boot) ----------
-   selftest() proves the linear-light claim on a FUSED field: its checkerboard is
-   averaged into uniform LEDs before the composite runs, so it cannot see a
-   sampling defect. probe() renders fixtures that DO carry LED-scale detail --
-   alternating native LEDs under minification, an impulse through a chained
-   reduce, a transparent texel under magnification, dark codes through the
-   quantiser -- and compares them to expectations computed here in plain JS,
-   never through boxTo(): a check that shares the code under test can share its
-   defect (Codex pixel-simulation audit, 2026-09-06). Same return shape as
-   selftest(); restores every field it touches; never touches the DOM. */
-function probe(opts){
-  opts=opts||{};
-  if(!GLE.live) return null;
-  const gl=GLE.gl, snap=Object.assign({},S);
-  const res={pass:true,checks:[],maxDelta:{}};
-  const half=(v)=>Math.max(1e-4, Math.abs(v)*2e-3);        // RGBA16F storage tolerance
-  const add=(name,value,expected,tol,extra)=>{
-    const ok=isFinite(value) && Math.abs(value-expected)<=tol;
-    res.checks.push(Object.assign({name,value:+(+value).toFixed(6),expected:+(+expected).toFixed(6),tol,pass:ok},extra||{}));
-    return ok; };
-  const toS=(v)=>v<=0.0031308?12.92*v:1.055*Math.pow(v,1/2.4)-0.055;
-  const toL=(v)=>v<=0.04045?v/12.92:Math.pow((v+0.055)/1.055,2.4);
-  const img=(w,h,fn)=>{ const d=new ImageData(w,h);
-    for(let y=0;y<h;y++) for(let x=0;x<w;x++) d.data.set(fn(x,y),4*(y*w+x)); return d; };
-  let seq=0;
-  const upload=(d)=>{ const t=GLE.uploadSource(d,d.width,d.height,'probe'+(seq++));
-    if(!t) throw new Error('upload refused at '+d.width+'x'+d.height); return t; };
-  const read=(t)=>{ const d=new Float32Array(t.w*t.h*4); gl.bindFramebuffer(gl.FRAMEBUFFER,t.fb);
-    gl.readPixels(0,0,t.w,t.h,gl.RGBA,gl.FLOAT,d); gl.bindFramebuffer(gl.FRAMEBUFFER,null);
-    const e=gl.getError(); if(e) throw new Error('readPixels error '+e); return d; };
-  // Double-precision direct box filter of one row: the oracle for every reduce check.
-  const boxRow=(src,dw)=>{ const cw=src.length, out=new Array(dw).fill(0);
-    for(let j=0;j<dw;j++){ const a=j*cw/dw, b=(j+1)*cw/dw; let s=0,w=0;
-      for(let i=Math.floor(a);i<Math.min(cw,Math.ceil(b));i++){ const ov=Math.min(b,i+1)-Math.max(a,i); if(ov>0){ s+=src[i]*ov; w+=ov; } }
-      out[j]=s/w; } return out; };
-  try{
-    // A neutral world. Every key set here is restored from snap at the end.
-    Object.assign(S,{wallMode:'free',fitMode:'stretch',mode:'sim',zoomMode:'free',zoomFree:1,panX:0,panY:0,
-      figure:false,cabGrid:false,tileVar:0,procOn:false,arrayOn:false,ambMode:'manual',ambient:0,offAxis:0,
-      wallBright:1,bits:16,fill:0.5,scaler:'good',blur:false,absBlur:true,dist:20,grid:false,isVideo:false});
+const pixelAudit={live:GLE.live,fail:GLE.fail,maxTexture:GLE.MAXTEX,tests:{}};
+try {
+ if(!GLE.live)throw new Error(GLE.fail);
+ const gl=GLE.gl;
+ const renderer=gl.getExtension('WEBGL_debug_renderer_info');
+ pixelAudit.renderer=renderer?gl.getParameter(renderer.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER);
+ let seq=0;
+ const img=(w,h,fn)=>{const d=new ImageData(w,h);for(let y=0;y<h;y++)for(let x=0;x<w;x++)d.data.set(fn(x,y),4*(y*w+x));return d;};
+ const upload=d=>GLE.uploadSource(d,d.width,d.height,'test'+seq++);
+ const read=t=>{const d=new Float32Array(t.w*t.h*4);gl.bindFramebuffer(gl.FRAMEBUFFER,t.fb);gl.readPixels(0,0,t.w,t.h,gl.RGBA,gl.FLOAT,d);const err=gl.getError();if(err)throw new Error('readPixels '+err);return Array.from(d);};
+ const quant=(tex,w,h)=>{const t=GLE.grab(w,h,true);GLE.pass(GLE.P.quant,tex,t,u=>gl.uniform1f(u.uLevels,12));return t;};
+ const impulse=img(130,1,x=>[x===64?255:0,0,0,255]);
+ const reduction=GLE.boxTo(upload(impulse),130,1,2,1,false);
+ pixelAudit.tests.reduction={input:'130 pixels, unit red impulse at index 64; resize to 2',actual:read(reduction).filter((_,i)=>i%4===0),expected:[1/65,0]};GLE.give(reduction);
+ const impT=upload(impulse),alignedIntermediate=GLE.boxTo(impT,130,1,4,1,false),alignedFinal=GLE.boxTo(alignedIntermediate.t,4,1,2,1,false);
+ pixelAudit.tests.reduction.proposedAlignedStages=read(alignedFinal).filter((_,i)=>i%4===0);[alignedIntermediate,alignedFinal].forEach(GLE.give);
+ const alpha=img(2,1,x=>x===0?[255,0,0,255]:[0,255,0,0]);
+ const alphaOut=GLE.boxTo(upload(alpha),2,1,4,1,false);
+ pixelAudit.tests.alpha={actualRGBA:read(alphaOut),expectedAtIndex1:[.75,0,0,1]};GLE.give(alphaOut);
+ const alphaT=upload(alpha),linearOpaque=GLE.grab(2,1,false);
+ GLE.pass(GLE.P.reduce,alphaT,linearOpaque,u=>{gl.uniform2f(u.uSrc,2,1);gl.uniform2f(u.uDst,2,1);gl.uniform1i(u.uAxis,0);gl.uniform1i(u.uNearest,0)});
+ const alphaFixed=GLE.boxTo(linearOpaque.t,2,1,4,1,false);pixelAudit.tests.alpha.proposedPrecompositeRGBA=read(alphaFixed);[linearOpaque,alphaFixed].forEach(GLE.give);
+ const signal=img(2,1,x=>[x?31:10,x?31:10,x?31:10,255]);const signalT=upload(signal);
+ const qFine=quant(signalT,2,1),correct=GLE.boxTo(qFine.t,2,1,1,1,false);
+ const mean=GLE.boxTo(signalT,2,1,1,1,false),qCoarse=quant(mean.t,1,1);
+ pixelAudit.tests.quantisation={levels:12,sourceCodes:[10,31],quantiseThenAverage:read(correct)[0],averageThenQuantise:read(qCoarse)[0]};
+ [qFine,correct,mean,qCoarse].forEach(GLE.give);
+ Object.assign(S,{wallMode:'free',wallW:2,wallH:.02,pitchA:1,src:img(2000,20,x=>{const v=x%2?255:0;return [v,v,v,255]}),srcW:2000,srcH:20,isVideo:false,name:'stripes-audit',fitMode:'stretch',zoomMode:'free',zoomFree:1,figure:false,panX:0,panY:0,bits:16,grid:false,cabGrid:false,tileVar:0,procOn:false,arrayOn:false,ambMode:'manual',ambient:0,offAxis:0,wallBright:1,blur:false,absBlur:true,dist:20});
+ const cv=document.createElement('canvas');pixelAudit.tests.minification=[];
+ const gallery=document.createElement('canvas');gallery.width=920;gallery.height=390;const g=gallery.getContext('2d');g.fillStyle='#10141b';g.fillRect(0,0,920,390);g.fillStyle='white';g.font='bold 22px Segoe UI';g.fillText('Same alternating black/white LEDs; only the pan changes',24,36);g.font='16px Segoe UI';g.fillStyle='#bbc4d0';g.fillText('WebGL2 render at 2 LEDs per display pixel · blur on · LED gaps on',24,64);
+ for(const grid of [false,true])for(const blur of [false,true])for(const panX of [0,.25,.5,.75]){
+  S.grid=grid;S.blur=blur;S.panX=panX;const geo=renderView(cv,1,false,{w:1000,h:10});
+  const p=cv.getContext('2d').getImageData(20,5,960,1).data;let sum=0;for(let i=0;i<p.length;i+=4)sum+=p[i];
+  pixelAudit.tests.minification.push({grid,blur,panX,cell:geo.cell,decim:geo.decim,meanSRGB:sum/960,expectedSRGB:187.51603067837462});
+  if(grid&&blur&&(panX===.25||panX===.75)){const x=panX===.25?24:476;g.fillStyle='#e9eef5';g.fillText('Pan '+panX+' px — actual',x,102);g.imageSmoothingEnabled=false;g.drawImage(cv,20,5,960,1,x,116,420,80);}
+ }
+ g.fillStyle='#e9eef5';g.fillText('Expected for both: uniform ~188 / 255 grey',24,238);g.fillStyle='rgb(188,188,188)';g.fillRect(24,254,872,80);g.fillStyle='#bbc4d0';g.font='14px Segoe UI';g.fillText('Interior strips enlarged for visibility. Software WebGL2 (ANGLE / SwiftShader).',24,369);pixelAudit.preview=gallery.toDataURL('image/png');
+ pixelAudit.glError=gl.getError();
+}catch(e){pixelAudit.error=e.stack;}
+document.body.innerHTML='<pre id="audit-result"></pre>';
+document.getElementById('audit-result').textContent=JSON.stringify(pixelAudit,null,2);
 
-    // 1. Chained reduce: an impulse must land entirely in ONE output bin.
-    { const N=130, out=GLE.boxTo(upload(img(N,1,x=>[x===64?255:0,0,0,255])),N,1,2,1,false);
-      const r=read(out); GLE.give(out);
-      const want=boxRow(Array.from({length:N},(_,x)=>x===64?1:0),2);
-      add('reduce 130->2, impulse@64: bin0 (expect 1/65)', r[0], want[0], half(want[0]));
-      add('reduce 130->2, impulse@64: bin1 (expect 0)',    r[4], want[1], 1e-4); }
-    // 2. Impulses either side of every final bin edge, ratios past 64:1, odd sizes.
-    { let worst=0, n=0;
-      for(const [cw,dw] of [[130,2],[4095,64],[4096,64],[4097,64],[5000,32],[8000,100],[3732,55],[129,2],[65,1],[1000,7],[2049,16],[4097,3]]){
-        if(cw>GLE.MAXTEX) continue;
-        for(let j=1;j<Math.min(dw,6);j++){ const edge=Math.floor(j*cw/dw);
-          for(const at of [edge-1, edge]){
-            const src=new Array(cw).fill(0); src[at]=1; const want=boxRow(src,dw);
-            const out=GLE.boxTo(upload(img(cw,1,x=>[x===at?255:0,0,0,255])),cw,1,dw,1,false);
-            const r=read(out); GLE.give(out);
-            for(let k=0;k<dw;k++){ worst=Math.max(worst,Math.abs(r[4*k]-want[k])); n++; } } } }
-      add('reduce boundary impulses: max |GPU - exact| over '+n+' outputs', worst, 0, 2e-3); }
-    { const cw=300,ch=200,dw=7,dh=5, ax=Math.floor(3*cw/dw), ay=Math.floor(2*ch/dh);
-      const out=GLE.boxTo(upload(img(cw,ch,(x,y)=>[(x===ax&&y===ay)?255:0,0,0,255])),cw,ch,dw,dh,false);
-      const r=read(out); GLE.give(out); let bad=0, worst=0;
-      // separable oracle: the impulse texel straddles a fractional bin edge, so
-      // its weight splits between two bins on each axis exactly as boxRow says
-      const wx=boxRow(Array.from({length:cw},(_,x)=>x===ax?1:0),dw), wy=boxRow(Array.from({length:ch},(_,y)=>y===ay?1:0),dh);
-      for(let y=0;y<dh;y++) for(let x=0;x<dw;x++){ const v=r[4*(y*dw+x)], e=wx[x]*wy[y];
-        worst=Math.max(worst,Math.abs(v-e)); if(Math.abs(v-e)>Math.max(1e-4,2e-3*e)) bad++; }
-      add('reduce mixed-axis 300x200->7x5: every bin matches the separable oracle (bad bins)', bad, 0, 0, {maxErr:+worst.toExponential(2)}); }
-    // 3. A transparent texel under magnification, and alpha invariance.
-    { const mag=(t1)=>{ const out=GLE.boxTo(upload(img(2,1,x=>x===0?[255,0,0,255]:t1)),2,1,4,1,false);
-        const r=Array.from(read(out)); GLE.give(out); return r; };
-      const a=mag([0,255,0,0]), b=mag([255,255,255,0]);
-      add('alpha magnify 2->4: texel1 R (expect .75)', a[4], .75, 2e-3);
-      add('alpha magnify 2->4: texel1 G leak (expect 0)', a[5], 0, 1e-4);
-      add('alpha magnify 2->4: texel2 R (expect .25)', a[8], .25, 2e-3);
-      add('alpha invariance: changing fully-transparent RGB moves output by', Math.max(...a.map((v,i)=>Math.abs(v-b[i]))), 0, 1e-4);
-      // the audit's other alpha cases: transparent black, a partial-alpha edge,
-      // the REDUCE path with a transparent texel, and a precomposited equivalent
-      const pre=(t)=>toL(t[0]/255)*(t[3]/255);            // decoded, premultiplied R
-      const c0=1, cH=pre([255,0,0,128]);
-      const tb=mag([0,0,0,0]); add('alpha magnify: transparent BLACK neighbour, texel1 R (expect .75)', tb[4], .75, 2e-3);
-      const hp=mag([255,0,0,128]); add('alpha magnify: half-alpha neighbour, texel1 R (expect .75+.25*a)', hp[4], .75*c0+.25*cH, 2e-3);
-      add('alpha magnify: half-alpha neighbour, texel2 R', hp[8], .25*c0+.75*cH, 2e-3);
-      { const out=GLE.boxTo(upload(img(4,1,x=>[255,0,0,x===1?0:255])),4,1,2,1,false); const r=Array.from(read(out)); GLE.give(out);
-        add('alpha REDUCE 4->2 with one transparent texel: bin0 R (expect .5)', r[0], .5, 2e-3); add('  ...bin1 R (expect 1)', r[4], 1, 2e-3); }
-      { const outT=GLE.boxTo(upload(img(2,1,x=>x===0?[255,0,0,255]:[0,255,0,0])),2,1,4,1,false); const rT=Array.from(read(outT)); GLE.give(outT);
-        const outO=GLE.boxTo(upload(img(2,1,x=>x===0?[255,0,0,255]:[0,0,0,255])),2,1,4,1,false); const rO=Array.from(read(outO)); GLE.give(outO);
-        add('alpha: transparent source == the same source precomposited over black (max |delta|)', Math.max(...rT.map((v,i)=>Math.abs(v-rO[i]))), 0, 1e-4); } }
-    // 3b. a grab() that cannot be honoured must not strand what the caller holds
-    { const before=GLE.poolBytes(); let threw=false;
-      try{ GLE.boxTo(upload(img(130,1,x=>[x===64?255:0,0,0,255])),130,1,2,GLE.MAXTEX+1,false); }catch(e){ threw=true; }
-      add('refusal: boxTo past MAX_TEXTURE_SIZE throws (1) and returns its intermediate to the pool (bytes unchanged)', (threw && GLE.poolBytes()>=before)?1:0, 1, 0, {poolBefore:before, poolAfter:GLE.poolBytes()}); }
-    // 4. Dark codes at 8-bit / 5% drive: every LED must be quantised BEFORE any averaging.
-    { const nx=5000, ny=40; S.wallW=nx/1000; S.wallH=ny/1000; S.pitchA=1; S.bits=8; S.wallBright=0.05;   // 40 rows: >= 2 screen rows at every viewport below
-      S.src=img(nx,ny,x=>{const v=x%2?31:10; return [v,v,v,255];}); S.srcW=nx; S.srcH=ny; S.name='probe-quant';
-      // viewport height keeps cell WIDTH-limited (h >= w*ny/nx), so the wall spans the full width
-      const cv=document.createElement('canvas'); const geo=renderView(cv,1,false,{w:1000,h:8});
-      const p=cv.getContext('2d').getImageData(20,4,960,1).data; let s=0; for(let i=0;i<p.length;i+=4) s+=p[i];
-      const levels=Math.floor(255*0.05), q=(c)=>toL(Math.floor((c/255)*levels+0.5)/levels);
-      const wantLin=(q(10)+q(31))/2;
-      const wrongLin=toL(Math.floor(toS((toL(10/255)+toL(31/255))/2)*levels+0.5)/levels);
-      add('quantise at native then average (5000 LEDs, codes 10/31, 8-bit @5%): mean sRGB', s/960, 255*toS(wantLin), 2,
-          {decim:geo.decim, averageThenQuantiseWouldBe:+(255*toS(wrongLin)).toFixed(1)});
-      // the same wall through other viewports and pans: the answer must not move
-      for(const [w,pan] of [[1000,.25],[1000,.5],[500,0],[250,.25]]){ S.panX=pan; const h=Math.max(2,Math.round(w*ny/nx)); const g2=renderView(cv,1,false,{w,h});
-        const p2=cv.getContext('2d').getImageData(Math.round(w*0.02),Math.floor(h/2),Math.round(w*0.96),1).data; let s2=0,n2=0; for(let i=0;i<p2.length;i+=4){ s2+=p2[i]; n2++; }
-        add(`quantise at native: viewport ${w} px, pan ${pan} (cell ${g2.cell.toFixed(3)}): mean sRGB`, s2/n2, 255*toS(wantLin), 2, {decim:g2.decim}); }
-      S.panX=0;
-      // and the memory fallback must announce itself, in the readout and the caption
-      const capWas=setNativeCap(2048); let geoF; try{ geoF=renderView(cv,1,false,{w:1000,h:2}); } finally{ setNativeCap(capWas); }
-      add('memory fallback (native cap 2048 on a 5000-LED crop): decim>1 and decimNote names it', (geoF.decim>1 && /BEFORE quantisation/.test(decimNote(geoF.decim)))?1:0, 1, 0, {decim:geoF.decim});
-      // the native-buffer edge: 8192 LEDs stays native, 8193 falls back (on any GPU with MAX_TEXTURE_SIZE >= 8192)
-      if(GLE.MAXTEX>=8193){ for(const [nxE,want] of [[8192,1],[8193,2]]){ S.wallW=nxE/1000; S.src=img(nxE,ny,x=>[100,100,100,255]); S.srcW=nxE; S.name='probe-edge'+nxE;
-        const gE=renderView(cv,1,false,{w:1000,h:2}); add(`native-buffer edge: ${nxE}-LED crop -> decim`, gE.decim, want, 0); } }
-      S.bits=16; S.wallBright=1; }
-    // 4b. the fallback's LED structure: a constant field must keep the same mask, native or decimated
-    { const nxC=128, nyC=20; S.wallW=nxC/1000; S.wallH=nyC/1000; S.pitchA=1; S.grid=true; S.fill=0.5; S.bits=16; S.wallBright=1;
-      S.src=img(nxC,nyC,()=>[100,100,100,255]); S.srcW=nxC; S.srcH=nyC; S.name='probe-mask';
-      const cvM=document.createElement('canvas');
-      const row=(cap)=>{ const was=cap?setNativeCap(cap):null; let g; try{ g=renderView(cvM,1,false,{w:100,h:20}); } finally{ if(cap) setNativeCap(was); }
-        const p=cvM.getContext('2d').getImageData(2,10,96,1).data; const v=[]; for(let i=0;i<p.length;i+=4) v.push(p[i]); return {v,decim:g.decim}; };
-      const nat=row(0), fb=row(64); let worst=0, ms=0, mf=0; for(let i=0;i<nat.v.length;i++){ worst=Math.max(worst,Math.abs(nat.v[i]-fb.v[i])); ms+=nat.v[i]; mf+=fb.v[i]; }
-      add(`fallback mask: constant field, native (decim ${nat.decim}) vs forced fallback (decim ${fb.decim}): row means differ by`, Math.abs(ms-mf)/nat.v.length, 0, 2, {maxPx:+worst.toFixed(1)});
-      S.grid=false; }
-    // 5 + 6. Alternating NATIVE LEDs under minification. Expected values are the
-    //        footprint integral of value x lit-area mask over each display pixel,
-    //        summed cell by cell (no antiderivative, no shader code).
-    const cv=document.createElement('canvas');
-    const litLen=(a,b,s)=>{ const lo=(1-s)/2; let m=0;
-      for(let c=Math.floor(a);c<Math.ceil(b);c++){ const x0=Math.max(a,c+lo), x1=Math.min(b,c+lo+s); if(x1>x0) m+=x1-x0; } return m; };
-    const expectPx=(ax,bx,ay,by,val,grid,fill)=>{ const A=(bx-ax)*(by-ay); let s=0;
-      if(!grid){ for(let cx=Math.floor(ax);cx<Math.ceil(bx);cx++) for(let cy=Math.floor(ay);cy<Math.ceil(by);cy++)
-        s+=val(cx,cy)*(Math.min(bx,cx+1)-Math.max(ax,cx))*(Math.min(by,cy+1)-Math.max(ay,cy)); return s/A; }
-      const sq=Math.sqrt(fill);
-      for(let cx=Math.floor(ax);cx<Math.ceil(bx);cx++) for(let cy=Math.floor(ay);cy<Math.ceil(by);cy++)
-        s+=val(cx,cy)*litLen(Math.max(ax,cx),Math.min(bx,cx+1),sq)*litLen(Math.max(ay,cy),Math.min(by,cy+1),sq);
-      return s/A/fill; };
-    const sweep=(k,pattern,phase,grid,blur)=>{
-      const vert=pattern!=='H', VW=vert?1000:10, VH=vert?10:1000;
-      const nx=Math.round(1000*k*(vert?1:0.01)), ny=Math.round(1000*k*(vert?0.01:1));
-      S.wallW=nx/1000; S.wallH=ny/1000; S.pitchA=1; S.grid=grid; S.blur=blur; S.panX=vert?phase:0; S.panY=vert?0:phase;
-      const val = pattern==='V' ? (x,y)=>x%2 : pattern==='H' ? (x,y)=>y%2 : (x,y)=>(x+y)%2;
-      S.src=img(nx,ny,(x,y)=>{const v=val(x,y)?255:0; return [v,v,v,255];}); S.srcW=nx; S.srcH=ny; S.name='probe-'+pattern+k;
-      const geo=renderView(cv,1,false,{w:VW,h:VH});
-      const cell=geo.cell, ox=geo.ox, oy=geo.oy, n=960, x0=vert?20:5, y0=vert?5:20;
-      const p=cv.getContext('2d').getImageData(x0,y0,vert?n:1,vert?1:n).data;
-      let sum=0, se=0, worst=0;
-      for(let i=0;i<n;i++){ const px=vert?x0+i:x0, py=vert?y0:y0+i;
-        const e=255*toS(expectPx((px-ox)/cell,(px+1-ox)/cell,(py-oy)/cell,(py+1-oy)/cell,val,grid,S.fill)), v=p[4*i];
-        sum+=v; se+=e; worst=Math.max(worst,Math.abs(v-e)); }
-      return {cell, decim:geo.decim, mean:sum/n, expMean:se/n, maxPx:worst}; };
-    // 5. The audit's 16 combinations at exactly 2 LEDs per display pixel.
-    for(const grid of [false,true]) for(const blur of [false,true]) for(const phase of [0,.25,.5,.75]){
-      const r=sweep(2,'V',phase,grid,blur);
-      add(`minify 2 LED/px V stripes grid=${grid?1:0} blur=${blur?1:0} pan=${phase}: mean sRGB`, r.mean, r.expMean, 2,
-          {cell:+r.cell.toFixed(3),decim:r.decim,maxPx:+r.maxPx.toFixed(1)});
-      if(!blur) add(`  ...same, per-pixel max |delta|`, r.maxPx, 0, 3); }
-    // 5b. the same 2 LED/px case for horizontal stripes and a checkerboard
-    for(const pattern of ['H','C']) for(const grid of [false,true]) for(const phase of [0,.25,.75]){
-      const r=sweep(2,pattern,phase,grid,false);
-      add(`minify 2 LED/px ${pattern} grid=${grid?1:0} pan=${phase}: per-pixel max |delta|`, r.maxPx, 0, 3, {mean:+r.mean.toFixed(1)}); }
-    // 5c. the LEADING fragment: an impulse in LED column 0 at pan 0.25 -- half of
-    //     screen pixel 0's footprint is that LED, the other half is outside the
-    //     wall (dark). Excluding the partial fragment read its neighbour's
-    //     integral instead: 0 where ~188 is right (review finding 1).
-    { const nx=2000, ny=20; S.wallW=2; S.wallH=0.02; S.pitchA=1; S.grid=false; S.blur=false; S.panX=0.25; S.panY=0;
-      S.src=img(nx,ny,x=>{const v=x===0?255:0; return [v,v,v,255];}); S.srcW=nx; S.srcH=ny; S.name='probe-edge';
-      const g=renderView(cv,1,false,{w:1000,h:10}); const p=cv.getContext('2d').getImageData(0,5,3,1).data;
-      add('leading partial fragment (pan .25, LED 0 lit): screen pixel 0 (expect ~188 = half footprint lit)', p[0], 255*toS(0.5), 3, {px1:p[4],px2:p[8],ox:+g.ox.toFixed(2)});
-      add('  ...screen pixel 1 (footprint LEDs 1.5-3.5, all dark: expect 0)', p[4], 0, 1); S.panX=0; }
-    // 6. Phase sweeps at 1.1 / 1.5 / 4 / 8 LEDs per pixel, three patterns. The
-    //    grid-on per-pixel maximum is the mask-coupling error-budget readout.
-    for(const k of [1.1,1.5,4,8]) for(const pattern of ['V','H','C']) for(const grid of [false,true]){
-      let worstMean=0, worstPx=0;
-      for(const phase of [0,.25,.5,.75]){ const r=sweep(k,pattern,phase,grid,false);
-        worstMean=Math.max(worstMean,Math.abs(r.mean-r.expMean)); worstPx=Math.max(worstPx,r.maxPx); }
-      res.maxDelta[`${k}x-${pattern}-grid${grid?1:0}`]=+worstPx.toFixed(1);
-      add(`sweep ${k} LED/px ${pattern} grid=${grid?1:0}: worst |mean delta| over phases`, worstMean, 0, 2);
-      add(`sweep ${k} LED/px ${pattern} grid=${grid?1:0}: worst per-pixel |delta|`, worstPx, 0, 3); }
-    // 6b. blur ON over a non-constant field: the interior MEAN must survive the blur
-    for(const k of [1.1,1.5]) for(const grid of [false,true]){ const r=sweep(k,'C',0.25,grid,true);
-      add(`blur on, ${k} LED/px checkerboard grid=${grid?1:0}: |mean delta|`, Math.abs(r.mean-r.expMean), 0, 2); }
-    // 6c. beyond 128 LED texels per fragment the two-stage path must engage, say so, and still average
-    { const nx=8000, ny=160; S.wallW=8; S.wallH=0.16; S.pitchA=1; S.grid=false; S.blur=false; S.panX=0.25; S.panY=0;   // 160 rows = exactly one screen row at 1/160 px per LED
-      S.src=img(nx,ny,x=>{const v=x%2?255:0; return [v,v,v,255];}); S.srcW=nx; S.srcH=ny; S.name='probe-coarse';
-      const g=renderView(cv,1,false,{w:50,h:1}); const p=cv.getContext('2d').getImageData(2,0,46,1).data; let s=0,n=0; for(let i=0;i<p.length;i+=4){ s+=p[i]; n++; }
-      add(`coarse path (${(1/g.cell).toFixed(0)} LEDs/px): two-stage average engaged and noted`, (g.coarse && /two stages/.test(frameNote(g)))?1:0, 1, 0, {cell:+g.cell.toFixed(4)});
-      add('coarse path: period-2 stripes still average to ~188', s/n, 255*toS(0.5), 3); S.panX=0; }
-  }catch(e){ res.checks.push({name:'probe threw',value:e.message,pass:false}); }
-  Object.assign(S,snap); GLE.invalidateSource(); draw();
-  res.pass=res.checks.every(c=>c.pass);
-  return res;
-}
-
-/* ---------- boot ---------- */
-// A measuring instrument that cannot run its own equations must say so, not
-// quietly render an approximation and let it be mistaken for a simulation.
-if(!GLE.live){
-  const d=$('drop'); d.classList.remove('hide');
-  d.innerHTML='<h2 style="color:var(--bad)">SQUINT cannot render on this machine</h2>'+
-    '<p>'+(GLE.fail||'WebGL2 unavailable')+'</p>'+
-    '<p>The simulation runs in linear light on the GPU because that is the only way '+
-    'to compute it correctly. There is deliberately no fallback: a canvas-2D path '+
-    'would render a different, gamma-space answer and present it as the same '+
-    'measurement. SQUINT will not do that.</p>'+
-    '<p>Try a current Chrome, Edge or Firefox with hardware acceleration enabled.</p>';
-  document.querySelectorAll('#rail input,#rail select,#rail button').forEach(el=>el.disabled=true);
-} else {
-  applyCal(false);
-  setDist(5);
-  setCabMode(true);        // event walls are cabinet-built by default
-  draw();
-  selftest();
-  cabRefresh();
-}
 </script>
 </body>
 </html>

@@ -41,12 +41,19 @@ Every intermediate buffer is RGBA16F holding linear light.
 0. UPLOAD as an sRGB texture, so sampling returns linear values.
 
 1. NATIVE GRID. Wall width divided by pitch gives the real panel resolution, and
-   your content is resampled onto exactly that grid by a deterministic box
-   filter - repeated exact 2x2 averages, then one area-weighted pass. A 12 m
+   your content is resampled onto exactly that grid by an exact separable area
+   reduce - each axis in stages of at most 64:1 whose sizes are integer
+   multiples of the target, so the chain IS the direct box filter (an earlier
+   stage rule was exact per stage but not for the chain; see reviews/). A 12 m
    wall at 3.9 mm is 3077 px wide: your 4K master loses 20% of its detail before
    anything else happens, and that is usually what kills a design, not the pitch.
    ("Cheap processor" switches to nearest-neighbour, which is what you get from
-   a bad scaler.)
+   a bad scaler.) Every LED is then quantised individually, and when the wall
+   has more LEDs than your screen has pixels for it - the default view, and
+   the exported PNG - the quantised LED field is area-averaged onto the screen
+   the same way, with the lit-area mask folded into the average. One LED is
+   never allowed to stand in for several: that is what v1.0-v1.2 did, and it
+   aliased fine detail to black or white depending on where you had panned.
 
 2. BIT DEPTH / PWM. Quantisation happens in the signal domain, which is what a
    real processor does and why posterisation shows up near black rather than
@@ -217,6 +224,13 @@ Scroll zooms anchored on the cursor, drag pans, double-click recentres.
 
 SELF-TEST
 ---------
+(There is a second, deeper check that does NOT run at boot: SQUINT.probe() in
+the console renders 82 fixtures that carry LED-scale detail - alternating LEDs
+under minification, impulses through the reduce, a transparent texel under
+magnification, dark codes through the quantiser - against expectations computed
+independently of the shaders. The boot self-test below cannot see any of those:
+its checkerboard is averaged into uniform LEDs before the composite runs.)
+
 Runs at boot and asserts two things through the real pipeline:
   - a 50/50 black/white field, fused, lands on sRGB 188 (gamma-space would be
     128). This single number is the difference between right and confidently
@@ -250,6 +264,23 @@ honest to leave it out, not because it was inconvenient.
   calibration. (Tile-to-tile brightness variance IS simulated - the Tile
   variance slider - since the event-wall build; the physical seam itself is
   not, because on good stock it is nearly invisible.)
+- Walls beyond the native buffer (8192 LEDs on an axis, or 24 million LEDs in
+  the visible crop) are averaged N:1 BEFORE quantisation, which overstates
+  dark-grade brightness (2x at 8-bit / 5% drive on codes near black). The
+  readout and the export caption both say so whenever it happens. Every
+  shipped preset at 12x6, and a 24x24 wall of 600x337.5 tiles, stay native.
+- Zoomed out, the cabinet index for tile variance and the edge of an array gap
+  are decided per screen pixel, not integrated - a <= 1 px effect at cabinet
+  and gap boundaries. The LED colours and the lit-area mask ARE integrated,
+  exactly, up to 128 LEDs per screen pixel; beyond that (eye-match past
+  ~200 m on a sub-millimetre pitch) the field is averaged in two stages,
+  within 3% at pixel edges, and the readout and the export caption say so.
+- In the native-buffer fallback above, the LED structure (the lit-area mask)
+  is applied per screen pixel on top of the averaged field rather than per
+  LED; the same note covers it.
+- Measured on the RTX 4090, 2026-09-06, against an independent footprint
+  integral: worst per-pixel error of the minified render is 1.1 sRGB codes at
+  1.1 LEDs per pixel, 0.6 at 1.5, 0.5 at 2 / 4 / 8 (probe(), 116 rows).
 
 
 KEYS
@@ -283,7 +314,9 @@ Measured, not asserted:
   - linear-light fusion: the 50/50 field fuses to 185.6 against a reference
     block the pipeline reproduces as exactly 188.0, with the gamma reference
     reproduced as exactly 128.0. The pre-rewrite canvas-2D build read 131.
-  - the "cheap processor" scaler genuinely point-samples: local range 247 in a
+  - (measured zoomed IN, where the content is magnified; zoomed out, both
+    scalers' output is then area-averaged onto the screen as of v1.3)
+    the "cheap processor" scaler genuinely point-samples: local range 247 in a
     1 px stripe field, against 7 for the box filter
   - fill factor 90% -> 25% moves mean brightness by 0.1% in the fused regime
   - bit depth: the dark ramp holds 40 levels at full drive and 9 at 20% drive,

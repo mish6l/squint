@@ -1,0 +1,223 @@
+{
+  "live": true,
+  "fail": "",
+  "maxTexture": 8192,
+  "tests": {
+    "reduction": {
+      "input": "130 pixels, unit red impulse at index 64; resize to 2",
+      "actual": [
+        0.0076904296875,
+        0.0076904296875
+      ],
+      "expected": [
+        0.015384615384615385,
+        0
+      ],
+      "proposedAlignedStages": [
+        0.015380859375,
+        0
+      ]
+    },
+    "alpha": {
+      "actualRGBA": [
+        1,
+        0,
+        0,
+        1,
+        0.5625,
+        0.1875,
+        0,
+        1,
+        0.0625,
+        0.1875,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1
+      ],
+      "expectedAtIndex1": [
+        0.75,
+        0,
+        0,
+        1
+      ],
+      "proposedPrecompositeRGBA": [
+        1,
+        0,
+        0,
+        1,
+        0.75,
+        0,
+        0,
+        1,
+        0.25,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    "quantisation": {
+      "levels": 12,
+      "sourceCodes": [
+        10,
+        31
+      ],
+      "quantiseThenAverage": 0.003814697265625,
+      "averageThenQuantise": 0.00762939453125
+    },
+    "minification": [
+      {
+        "grid": false,
+        "blur": false,
+        "panX": 0,
+        "cell": 0.5,
+        "decim": 1,
+        "meanSRGB": 41.46145833333333,
+        "expectedSRGB": 187.51603067837462
+      },
+      {
+        "grid": false,
+        "blur": false,
+        "panX": 0.25,
+        "cell": 0.5,
+        "decim": 1,
+        "meanSRGB": 0.005208333333333333,
+        "expectedSRGB": 187.51603067837462
+      },
+      {
+        "grid": false,
+        "blur": false,
+        "panX": 0.5,
+        "cell": 0.5,
+        "decim": 1,
+        "meanSRGB": 213.828125,
+        "expectedSRGB": 187.51603067837462
+      },
+      {
+        "grid": false,
+        "blur": false,
+        "panX": 0.75,
+        "cell": 0.5,
+        "decim": 1,
+        "meanSRGB": 255,
+        "expectedSRGB": 187.51603067837462
+      },
+      {
+        "grid": false,
+        "blur": true,
+        "panX": 0,
+        "cell": 0.5,
+        "decim": 1,
+        "meanSRGB": 83.053125,
+        "expectedSRGB": 187.51603067837462
+      },
+      {
+        "grid": false,
+        "blur": true,
+        "panX": 0.25,
+        "cell": 0.5,
+        "decim": 1,
+        "meanSRGB": 0.005208333333333333,
+        "expectedSRGB": 187.51603067837462
+      },
+      {
+        "grid": false,
+        "blur": true,
+        "panX": 0.5,
+        "cell": 0.5,
+        "decim": 1,
+        "meanSRGB": 234.51041666666666,
+        "expectedSRGB": 187.51603067837462
+      },
+      {
+        "grid": false,
+        "blur": true,
+        "panX": 0.75,
+        "cell": 0.5,
+        "decim": 1,
+        "meanSRGB": 255,
+        "expectedSRGB": 187.51603067837462
+      },
+      {
+        "grid": true,
+        "blur": false,
+        "panX": 0,
+        "cell": 0.5,
+        "decim": 1,
+        "meanSRGB": 41.46145833333333,
+        "expectedSRGB": 187.51603067837462
+      },
+      {
+        "grid": true,
+        "blur": false,
+        "panX": 0.25,
+        "cell": 0.5,
+        "decim": 1,
+        "meanSRGB": 0.005208333333333333,
+        "expectedSRGB": 187.51603067837462
+      },
+      {
+        "grid": true,
+        "blur": false,
+        "panX": 0.5,
+        "cell": 0.5,
+        "decim": 1,
+        "meanSRGB": 213.828125,
+        "expectedSRGB": 187.51603067837462
+      },
+      {
+        "grid": true,
+        "blur": false,
+        "panX": 0.75,
+        "cell": 0.5,
+        "decim": 1,
+        "meanSRGB": 255,
+        "expectedSRGB": 187.51603067837462
+      },
+      {
+        "grid": true,
+        "blur": true,
+        "panX": 0,
+        "cell": 0.5,
+        "decim": 1,
+        "meanSRGB": 83.053125,
+        "expectedSRGB": 187.51603067837462
+      },
+      {
+        "grid": true,
+        "blur": true,
+        "panX": 0.25,
+        "cell": 0.5,
+        "decim": 1,
+        "meanSRGB": 0.005208333333333333,
+        "expectedSRGB": 187.51603067837462
+      },
+      {
+        "grid": true,
+        "blur": true,
+        "panX": 0.5,
+        "cell": 0.5,
+        "decim": 1,
+        "meanSRGB": 234.51041666666666,
+        "expectedSRGB": 187.51603067837462
+      },
+      {
+        "grid": true,
+        "blur": true,
+        "panX": 0.75,
+        "cell": 0.5,
+        "decim": 1,
+        "meanSRGB": 255,
+        "expectedSRGB": 187.51603067837462
+      }
+    ]
+  },
+  "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+  "glError": 0
+}

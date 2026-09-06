@@ -34,16 +34,31 @@ cp squint.html index.html
 git rev-parse HEAD:squint.html HEAD:index.html     # same blob id after commit
 sha256sum squint.html index.html                    # same hash in the working tree
 
-# 2. Open squint.html in Chrome (file:// is fine), then in the console:
+# 2. Node harnesses over the EXTRACTED shipped source (no GPU):
+node tools/test-cabinets-node.js squint.html        # cabinet geometry, 91 rows
+node tools/test-reduce-stages-node.js squint.html   # boxTo stage rule vs a double-precision oracle, incl. red-proofs of the old rule
+
+# 3. Open squint.html in Chrome (file:// is fine), then in the console:
 SQUINT.selftest()
 #    must return linear fusion 188 ± 6 and fill drift ≈ 0.1%, with NO red banner.
 #    Check the console for shader compile/link errors — 7/7 programs must build.
+SQUINT.probe()
+#    must return pass:true over all 82 rows (chained reduce, alpha, quantisation
+#    order, minification at 1.1/1.5/2/4/8 LEDs per pixel with independent
+#    expectations). Takes ~1 s. Its .maxDelta is the per-case worst pixel error.
+# 4. Or all of it from a real Chrome via Playwright, plus the exported-PNG row:
+#    playwright-cli open http://127.0.0.1:8731/squint.html --browser=chrome
+#    playwright-cli run-code --filename=tools/pw-render-probe.js
 ```
 
-**A green `selftest()` proves the RENDER CORE, not the feature.** It forces a
-neutral world (manual ambient, 0° off-axis, full drive, no array, no processor)
-and asserts two numbers — which is precisely what makes it blind to bugs that *are*
-the coupling between controls. Round 3 (2026-08-23) fixed 23 findings, every one
+**A green `selftest()` proves the RENDER CORE's linear-light claim, not the
+feature — and not the sampling either.** It forces a neutral world (manual
+ambient, 0° off-axis, full drive, no array, no processor) and asserts two
+numbers on a FUSED field — which is precisely what makes it blind to bugs that
+*are* the coupling between controls, and to sampling defects (its checkerboard
+is averaged into uniform LEDs before the composite runs; the 2026-09-06 audit's
+minification aliasing coexisted with a green selftest). `probe()` is the check
+that carries LED-scale detail. Round 3 (2026-08-23) fixed 23 findings, every one
 at a seam between subsystems, and `selftest()` stayed 188 / 0.11% across all of
 them. **So: when a change adds or alters a control, the verification must set
 that control and read a number only the correct code can produce** — through

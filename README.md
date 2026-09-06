@@ -35,7 +35,7 @@ are guesses and the top bar says UNCALIBRATED.
 
 | | |
 |---|---|
-| **Native grid** | Content resampled to the wall's true LED grid by an exact box filter |
+| **Native grid** | Content resampled to the wall's true LED grid by an exact box filter — and when the wall has more LEDs than your screen has pixels, the quantised LED field is area-averaged onto the screen the same way, lit-area mask included. One LED never stands in for several — and on the rare wall that exceeds the native buffer, the readout and the export caption say what was approximated |
 | **Cabinets** | Walls are built from real tiles, and the pitch is derived from the tile — a 500 mm cabinet at "2.6 mm" carries 192 px, so the true pitch is 2.604 mm and a 12×6 wall is exactly 2304×1152. Custom tiles take width × height; heights are quantised to whole LED rows, and a height more than 0.1 rows off blocks export |
 | **Processor feed** | A 2304-wide wall fed 1920×1080 is a 1920-wide wall that happens to contain more LEDs. Content is genuinely resampled through the feed's grid |
 | **Bit depth / drive** | Quantisation in the signal domain. An 8-bit chain at 20% drive collapses a 40-level dark ramp to 9 — this is why dark grades band on real walls |
