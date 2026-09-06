@@ -1,6 +1,6 @@
 # Plan: Non-square Custom cabinets (FR-002 #1)
 
-Status: EXECUTED 2026-09-05 — built, gated (harness 87/87 + real-Chrome rows), Codex round 4 findings fixed; awaiting `/commit` → `/ship`. Move to `plans/shipped/` at ship.
+Status: SHIPPED 2026-09-05 — commit `6c6f0cd` on `main`; gate as run: harness 91/91 over the committed blob + real-Chrome rows; Codex rounds 4/4b closed (4b's Low fixed, harness-proven, not re-reviewed).
 
 ## Overview
 The Custom cabinet row exposes only width-mm and pixels-across, and `cab()`
