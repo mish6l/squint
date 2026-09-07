@@ -344,11 +344,16 @@ Nothing is left flagged as unverified.
 SCRIPTING HANDLE
 ----------------
 window.SQUINT exposes { S, nativeRes, contentRect, cellPx, draw, ppmmDev,
-viewUnder, geo, geoB, GLE, selftest, ambientFraction, contrastRatio,
-offAxisGain, effectiveNits, blackFraction, spanW, ARCMIN_RAD, MM_PER_M,
-CABS, cab, cabPitch, cabPxY, cabMMY, cabRowsRes, cabTileTxt, cabRefresh,
-syncFromCabinets, screenRes, effectiveRes, gapPx, syncPlan, exportTemplate }
-from the console. The cabinet helpers are how a change to the wall model gets
-verified: set S, call syncFromCabinets(); draw(); cabRefresh(), then read
-nativeRes(S.pitchA), cabPxY() and cabRowsRes() - numbers only the correct code
-can produce. selftest() alone cannot see a wrong cabinet height.
+viewUnder, geo, geoB, GLE, selftest, probe, renderView, ambientFraction,
+contrastRatio, offAxisGain, effectiveNits, blackFraction, spanW, ARCMIN_RAD,
+MM_PER_M, CABS, cab, cabPitch, cabPxY, cabMMY, cabRowsRes, cabTileTxt,
+cabRefresh, syncFromCabinets, screenRes, effectiveRes, gapPx, syncPlan,
+exportTemplate, setNativeCap, decimNote, frameNote, reduceStages } from the
+console; GLE carries the GPU side { gl, P, pass, grab, give, boxTo, reduceTo,
+poolBytes, uploadSource, MAXTEX }. The cabinet helpers are how a change to the
+wall model gets verified: set S, call syncFromCabinets(); draw(); cabRefresh(),
+then read nativeRes(S.pitchA), cabPxY() and cabRowsRes() - numbers only the
+correct code can produce. probe() is how a change to the RENDER gets verified
+(116 fixtures, ~1 s). selftest() alone cannot see either. geo() returns the
+last frame's geometry, including decim / dispReduce / coarse / failed - the
+flags behind every note the readout and the export caption print.

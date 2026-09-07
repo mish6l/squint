@@ -95,10 +95,22 @@ which is exactly the kind of confidently-wrong answer the rewrite exists to
 remove. The bundled test card carries that patch with 188 and 128 reference
 blocks beside it, so you can check the claim by eye in five seconds.
 
-It's also been through two rounds of external code review and one adversarial
-audit of the *model* rather than the code. Those write-ups, including the
-verdict before the fixes ("not fit for client-facing pitch decisions") and every
-finding with its status, are in [`reviews/`](reviews/).
+There is a second, deeper check that does not run at boot: `SQUINT.probe()`
+renders 116 fixtures that carry LED-scale detail — alternating LEDs under
+minification, impulses through the reduce, a transparent texel under
+magnification, dark codes through the quantiser — against expectations computed
+independently of the shaders. It exists because the boot self-test could never
+have caught the zoomed-out aliasing that v1.0–v1.2 shipped with: its
+checkerboard is averaged into uniform LEDs before the composite runs. Two Node
+harnesses in [`tools/`](tools/) check the geometry and the reduce's stage rule
+against double-precision oracles.
+
+It has been through six rounds of external code review, one adversarial audit
+of the *model*, and one pixel-simulation audit that executed the real shaders.
+Those write-ups, including the verdict before the fixes ("not fit for
+client-facing pitch decisions"), the four sampling defects found in 2026-09, and
+every finding with its status, are in [`reviews/`](reviews/), unedited. The
+version history is in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Not modelled
 
@@ -116,6 +128,9 @@ refresh, scan banding, sensor moiré; geometric foreshortening off-axis
 | `testcard.png` | 3840×2160 test card: legibility ladder, hairlines, stripe bursts, gamma-fusion patch with references, dark ramp |
 | `make-testcard.ps1` | regenerates it |
 | `reviews/` | the reviews that shaped the tool |
+| `tools/` | the gate: two Node harnesses over the shipped source, three Playwright probes for a real Chrome |
+| `context/` | plans (with their execution records), the project config the gate reads, review briefs |
+| `CHANGELOG.md` | what changed in each release, and what was wrong before it |
 
 ## Licence
 

@@ -124,19 +124,20 @@ gh release create vX.Y --target "$(git rev-parse HEAD)" \
   updates them in the same commit.
 
 ## Areas (vocabulary for plans)
-| Area | Where | What |
+| Area | Where (grep the name; line numbers drift) | What |
 |---|---|---|
-| `panel` | `squint.html` ~1–300 | HTML/CSS controls, rows, hints, ids |
-| `state` | ~490–560 | `S` defaults, `CABS`, `cab()`, sync helpers |
-| `model` | ~560–900 | photometry, acuity, contrast, distances |
-| `pipeline` | GLSL blocks + draw | 7 programs, texture pool, resample, quantise |
-| `outputs` | ~1900–1980 | build plan, caption strip, PNG guide, filenames |
-| `selftest` | ~1980–2080 | boot assertion + console handle |
-| `docs` | `README.txt`, `README.md`, vault `SQUINT/` | manual, limits list, Documentation, field reports |
+| `panel` | top of `squint.html` to `<script>` | HTML/CSS controls, rows, hints, ids |
+| `state` | `const S = {` … `syncFromCabinets` | `S` defaults, `CABS`, `cab()`, `tileMMY()`, `reduceStages()`, `NATIVE_CAP` / `decimNote` / `frameNote` |
+| `model` | `screenRes` … `contrastRatio` | photometry, acuity, contrast, distances |
+| `pipeline` | the `GLE` IIFE: `FS_REDUCE` … `boxTo` / `reduceTo`; then `renderView` | 7 programs, texture pool, exact reduce (aligned stages, fragment-aligned + lit-weighted mode), quantise, composite, blur |
+| `outputs` | `updateReadout`, `composeExport`, `exportTemplate`, `syncPlan` | readout notes, caption strip (+ wrapped warning lines), PNG guide, filenames, build plan |
+| `selftest` | `selftest()`, `probe()`, `window.SQUINT` | boot assertion; the 116-row render probe; console handle |
+| `tools` | `tools/` | `test-cabinets-node.js`, `test-reduce-stages-node.js`, `pw-render-probe.js` and the two cabinet probes |
+| `docs` | `README.txt`, `README.md`, `CHANGELOG.md`, vault `SQUINT/` | manual, limits list, version history, Documentation, field reports |
 
 ## Where things live
 - Repo (PC2): `D:\Mishal\Claude Code\SQUINT` · GitHub `mish6l/squint` (public, MIT)
-- Live: <https://mish6l.github.io/squint/> · Releases: v1.0 (superseded), **v1.1**
+- Live: <https://mish6l.github.io/squint/> · Releases: v1.0–v1.2 (superseded, bannered), **v1.3** · Issues track the declared follow-ups (`follow-up`) and the v2.0 spine (`v2.0`)
 - Vault: `H:\…\My Notes\SQUINT\` — Documentation, soft launch plan, v2 backlog
   (unparked 2026-09-04), v2 triage, **field reports** (the reported-gaps ledger),
   `reviews\`, `handovers\`
