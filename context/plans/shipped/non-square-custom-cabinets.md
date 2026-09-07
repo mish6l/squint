@@ -361,18 +361,18 @@ Every probe below is a number only the correct code can produce. **Do not write
   reply draft (`~/.claude/jobs/da6cb5ae/tmp/reply-jono301.md`) promises #1.
 
 ## Follow-ups (declared, not in this change)
-- **F1 — double rounding, PRESETS ONLY after round 4.** `ny` (per wall) vs
+- **F1 — double rounding, PRESETS ONLY after round 4.** → [#1](https://github.com/mish6l/squint/issues/1) `ny` (per wall) vs
   `cabY·cabPxY()` (per tile) differ by `cabY × residual` rows when the tile
   height is not a whole number of pixels — preset 6 at cabY ≥ 9 (1169 vs 1170;
   two rows by cabY 16). The custom path is now built from the tiled height
   (`tileMMY()`) and no longer carries this. Fixing the presets = route them
   through `tileMMY()` too — changes preset 6's `ny` and printed height, so it
   needs its own commit, its own gate row, and a release-note line.
-- **F2 — free-mode guide grid.** After a custom build, *Free size* keeps
+- **F2 — free-mode guide grid.** → [#2](https://github.com/mish6l/squint/issues/2) After a custom build, *Free size* keeps
   `S.pitchA`/`wallH` but the guide and overlay revert to a square 500 mm tile
   (:1935 fallback). Honest fix is to draw no cabinet grid in free mode or label
   it "assumed 500 mm square".
-- **F3 — view B cabinet grid.** The three `cpx/cpy` blocks run for view B with
+- **F3 — view B cabinet grid.** → [#3](https://github.com/mish6l/squint/issues/3) The three `cpx/cpy` blocks run for view B with
   A's px counts on B's pitch; collapse into one helper taking the view's pitch
   (`round(cab().mm/pitch) × round(cabMMY()/pitch)`).
 - Hint/plan `toFixed(2)` vs caption `fmtPitch` on metres (`2.02` vs `2.025`).
@@ -439,7 +439,7 @@ render path it exercises (`cabPxY()` → `uCabPx`) is unchanged code, and the
 guide PNG's horizontal grid (which uses the same `cpy`) landed at 384-row
 spacing in (g), so it is covered indirectly.
 
-**Follow-up F4 (new):** rail minimum 240 px clips every ≥3-char number input;
+**Follow-up F4 (new)** → [#4](https://github.com/mish6l/squint/issues/4)**:** rail minimum 240 px clips every ≥3-char number input;
 pre-existing for `pitchA`/`pitchB`; either raise the minimum (~270) or shrink
 `.val` from 62 px.
 

@@ -394,13 +394,13 @@ first, red first.
 - The briefing's "numbers that must hold" list gains the probe's expectations.
 
 ## Follow-ups (declared)
-- **F5** tile the native field so walls beyond `NATIVE_TEXELS` also quantise at
+- **F5** → [#5](https://github.com/mish6l/squint/issues/5) — tile the native field so walls beyond `NATIVE_TEXELS` also quantise at
   native (removes the fallback).
-- **F3** (carried) view B's tile px at B's pitch — the tile-variance hash and
+- **F3** → [#3](https://github.com/mish6l/squint/issues/3) (carried) view B's tile px at B's pitch — the tile-variance hash and
   grid should use physical cabinet size / view pitch.
-- **F6** blur-footprint margin and `sigma>8` transition fixtures (audit's
+- **F6** → [#7](https://github.com/mish6l/squint/issues/7) blur-footprint margin and `sigma>8` transition fixtures (audit's
   "investigations" table).
-- **F7** per-LED tile gain applied before the display reduce (removes the ≤ 1 px
+- **F7** → [#6](https://github.com/mish6l/squint/issues/6) per-LED tile gain applied before the display reduce (removes the ≤ 1 px
   boundary approximation).
 
 ## Rollback
